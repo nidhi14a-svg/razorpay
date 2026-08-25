@@ -42,6 +42,11 @@ def init_indexes():
         offers_collection.create_index("offer_id", unique=True)
         offers_collection.create_index("merchant_id")
         offers_collection.create_index("status")
+        offers_collection.create_index("campaign_id")
+        
+        campaigns_collection.create_index("campaign_id", unique=True)
+        campaigns_collection.create_index("merchant_id")
+        campaigns_collection.create_index("status")
         
         orders_collection.create_index("offer_id")
         orders_collection.create_index("razorpay_order_id", unique=True)

@@ -41,7 +41,13 @@ For each segment, respond in JSON ONLY:
 Be smart. Don't waste money on loyal customers.
 """
 
-def get_offer_for_segment(segment: str, merchant_rules: dict, use_deterministic: bool = False) -> dict:
+def get_offer_for_segment(
+    segment: str, 
+    merchant_rules: dict, 
+    use_deterministic: bool = False,
+    customer_context: dict = None,
+    campaign_context: dict = None
+) -> dict:
     """
     Call OpenRouter API to get offer for a segment.
     Uses openai/gpt-oss-20b:free (free open-source model via OpenRouter).
@@ -51,6 +57,8 @@ def get_offer_for_segment(segment: str, merchant_rules: dict, use_deterministic:
         segment: "loyal", "new_visitor", etc
         merchant_rules: {"max_discount_percentage": 20, ...}
         use_deterministic: If True, use hardcoded offers instead of API
+        customer_context: Optional dictionary with actual customer behavioral data
+        campaign_context: Optional dictionary with campaign specifics
     
     Returns:
         dict with offer details
@@ -111,7 +119,13 @@ def get_offer_for_segment(segment: str, merchant_rules: dict, use_deterministic:
     Max discount allowed: {merchant_rules.get('max_discount_percentage', 20)}%
     Min margin required: {merchant_rules.get('min_margin_percentage', 30)}%
     
-    What offer should this segment get?
+    Customer Context (Historical Behavior):
+    {json.dumps(customer_context) if customer_context else 'None provided.'}
+    
+    Campaign Context:
+    {json.dumps(campaign_context) if campaign_context else 'None provided.'}
+    
+    What offer should this segment get based on this specific context?
     """
     
     try:
@@ -162,3 +176,72 @@ if __name__ == "__main__":
         print(f"\n{segment.upper()}:")
         print(f"  Offer: {offer.get('offer')}")
         print(f"  Discount: {offer.get('discount_pct')}%")
+
+def generate_campaign_insights(campaign_data: dict, analytics: dict, segments_analytics: list) -> dict:
+    """
+    Call OpenRouter API to analyze a campaign's performance and provide recommendations.
+    
+    Returns a structured dictionary:
+    {
+        "summary": "...",
+        "key_insights": ["..."],
+        "recommendations": ["..."],
+        "segments": [{"segment": "loyal", "observation": "...", "recommendation": "..."}]
+    }
+    """
+    system_prompt = """You are a Campaign Analyst AI.
+    
+Analyze the provided campaign data and deterministic analytics.
+Do not invent any numbers. Only use the metrics provided.
+
+Respond ONLY with a JSON object in this exact structure:
+{
+    "summary": "1 sentence overview",
+    "key_insights": ["insight 1", "insight 2"],
+    "recommendations": ["rec 1", "rec 2"],
+    "segments": [
+        {"segment": "segment_name", "observation": "...", "recommendation": "..."}
+    ]
+}"""
+
+    context = {
+        "campaign": {
+            "name": campaign_data.get("campaign_name", "Unknown"),
+            "target": campaign_data.get("target_segment", "All"),
+            "status": campaign_data.get("status", "Unknown")
+        },
+        "overall_performance": analytics,
+        "segment_performance": segments_analytics
+    }
+    
+    user_message = f"Analyze this campaign:\n{json.dumps(context, indent=2)}"
+    
+    try:
+        openai_client = get_client()
+        response = openai_client.chat.completions.create(
+            model="openrouter/free",
+            max_tokens=800,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_message}
+            ]
+        )
+        
+        response_text = response.choices[0].message.content
+        return json.loads(response_text)
+        
+    except Exception as e:
+        print(f"[Note] Campaign Insights API unavailable: {e}")
+        # Return graceful deterministic fallback
+        return {
+            "summary": f"Campaign {context['campaign']['name']} has {analytics.get('total_offers', 0)} offers and {analytics.get('verified_payments', 0)} verified payments.",
+            "key_insights": ["Analytics pulled successfully.", "AI insights currently offline."],
+            "recommendations": ["Monitor ongoing performance manually."],
+            "segments": [
+                {
+                    "segment": s.get("segment", "unknown"),
+                    "observation": f"{s.get('verified_payments', 0)} conversions",
+                    "recommendation": "Maintain strategy."
+                } for s in segments_analytics
+            ]
+        }

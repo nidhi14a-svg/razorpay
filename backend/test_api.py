@@ -46,10 +46,12 @@ def test_api():
         data = response.json()
         
         # Verify structure
+        assert "offer_id" in data
+        assert "merchant_id" in data
         assert "segment" in data
-        assert "offer" in data
+        assert "offer_details" in data
         assert "discount_percentage" in data
-        assert "reason" in data
+        assert "offer_status" in data
         
         # Verify guardrail constraint directly on response
         assert data["discount_percentage"] <= 20.0
@@ -95,7 +97,15 @@ def test_api():
     # 5. Test POST /payments/verify
     print("\n--- Testing POST /payments/verify ---")
     
-    with mock.patch('razorpay_service.verify_payment_signature') as mock_verify:
+    with mock.patch('razorpay_service.verify_payment_signature') as mock_verify, \
+         mock.patch('main.orders_collection') as mock_orders:
+         
+        # Mock order finding so it doesn't return 404
+        mock_orders.find_one.return_value = {
+            "razorpay_order_id": "order_123",
+            "payment_status": "ORDER_CREATED"
+        }
+         
         # Test valid signature
         mock_verify.return_value = True
         response = client.post("/payments/verify", json={
