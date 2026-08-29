@@ -35,6 +35,10 @@ customers_collection = db["customers"]
 campaigns_collection = db["campaigns"]
 offers_collection = db["offers"]
 orders_collection = db["orders"]
+optimizations_collection = db["optimizations"]
+optimization_executions_collection = db["optimization_executions"]
+feedback_collection = db["feedback"]
+agent_runs_collection = db["agent_runs"]
 
 def init_indexes():
     """Create useful indexes on collections to optimize queries."""
@@ -52,6 +56,23 @@ def init_indexes():
         orders_collection.create_index("razorpay_order_id", unique=True)
         orders_collection.create_index("razorpay_payment_id")
         orders_collection.create_index("payment_status")
+        
+        optimizations_collection.create_index("optimization_id", unique=True)
+        optimizations_collection.create_index("campaign_id")
+        optimizations_collection.create_index("merchant_id")
+        
+        optimization_executions_collection.create_index("execution_id", unique=True)
+        optimization_executions_collection.create_index("optimization_id")
+        optimization_executions_collection.create_index("merchant_id")
+        
+        feedback_collection.create_index("feedback_id", unique=True)
+        feedback_collection.create_index("optimization_id", unique=True)
+        feedback_collection.create_index("campaign_id")
+        feedback_collection.create_index("merchant_id")
+        
+        agent_runs_collection.create_index("agent_run_id", unique=True)
+        agent_runs_collection.create_index("merchant_id")
+        
         print("✓ Database indexes initialized successfully")
     except Exception as e:
         print(f"⚠️ Warning: Failed to initialize indexes: {e}")

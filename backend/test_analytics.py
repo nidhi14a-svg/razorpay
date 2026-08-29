@@ -11,6 +11,9 @@ class TestCampaignAnalytics(unittest.TestCase):
     
     def setUp(self):
         # Patch collections
+        self.patcher_main_campaigns = patch('main.campaigns_collection')
+        self.mock_main_campaigns = self.patcher_main_campaigns.start()
+        
         self.patcher_campaigns = patch('analytics.campaigns_collection')
         self.mock_campaigns = self.patcher_campaigns.start()
         
@@ -18,23 +21,26 @@ class TestCampaignAnalytics(unittest.TestCase):
         self.mock_offers = self.patcher_offers.start()
 
     def tearDown(self):
+        self.patcher_main_campaigns.stop()
         self.patcher_campaigns.stop()
         self.patcher_offers.stop()
 
     def test_campaign_not_found(self):
+        self.mock_main_campaigns.find_one.return_value = None
         self.mock_campaigns.find_one.return_value = None
         
-        response = client.get("/campaigns/missing_camp/analytics")
+        response = client.get("/campaigns/missing_camp/analytics?merchant_id=test")
         self.assertEqual(response.status_code, 404)
         
-        response2 = client.get("/campaigns/missing_camp/analytics/segments")
+        response2 = client.get("/campaigns/missing_camp/analytics/segments?merchant_id=test")
         self.assertEqual(response2.status_code, 404)
 
     def test_campaign_with_no_offers(self):
+        self.mock_main_campaigns.find_one.return_value = {"campaign_id": "c1"}
         self.mock_campaigns.find_one.return_value = {"campaign_id": "c1"}
         self.mock_offers.aggregate.return_value = [] # DB returns empty aggregation
         
-        response = client.get("/campaigns/c1/analytics")
+        response = client.get("/campaigns/c1/analytics?merchant_id=test")
         self.assertEqual(response.status_code, 200)
         data = response.json()
         
@@ -47,6 +53,7 @@ class TestCampaignAnalytics(unittest.TestCase):
         self.assertEqual(data["revenue"], 0.0)
 
     def test_campaign_with_offers_but_no_payments(self):
+        self.mock_main_campaigns.find_one.return_value = {"campaign_id": "c1"}
         self.mock_campaigns.find_one.return_value = {"campaign_id": "c1"}
         
         # 2 customers, 2 offers, no orders
@@ -60,7 +67,7 @@ class TestCampaignAnalytics(unittest.TestCase):
             "total_revenue_paise": 0
         }]
         
-        response = client.get("/campaigns/c1/analytics")
+        response = client.get("/campaigns/c1/analytics?merchant_id=test")
         self.assertEqual(response.status_code, 200)
         data = response.json()
         
@@ -69,6 +76,7 @@ class TestCampaignAnalytics(unittest.TestCase):
         self.assertEqual(data["conversion_rate"], 0.0) # Zero verified, so 0%
 
     def test_revenue_and_conversion_calculation(self):
+        self.mock_main_campaigns.find_one.return_value = {"campaign_id": "c1"}
         self.mock_campaigns.find_one.return_value = {"campaign_id": "c1"}
         
         # 10 offers, 5 orders, 4 verified, 1 failed, 2000 INR revenue (200000 paise)
@@ -82,7 +90,7 @@ class TestCampaignAnalytics(unittest.TestCase):
             "total_revenue_paise": 200000 # 2000 INR
         }]
         
-        response = client.get("/campaigns/c1/analytics")
+        response = client.get("/campaigns/c1/analytics?merchant_id=test")
         self.assertEqual(response.status_code, 200)
         data = response.json()
         
@@ -94,6 +102,7 @@ class TestCampaignAnalytics(unittest.TestCase):
         self.assertEqual(data["average_order_value"], 500.0) # 2000 / 4
 
     def test_segment_breakdown_analytics(self):
+        self.mock_main_campaigns.find_one.return_value = {"campaign_id": "c1"}
         self.mock_campaigns.find_one.return_value = {"campaign_id": "c1"}
         
         # Mock aggregation returning grouped data
@@ -118,7 +127,7 @@ class TestCampaignAnalytics(unittest.TestCase):
             }
         ]
         
-        response = client.get("/campaigns/c1/analytics/segments")
+        response = client.get("/campaigns/c1/analytics/segments?merchant_id=test")
         self.assertEqual(response.status_code, 200)
         data = response.json()
         

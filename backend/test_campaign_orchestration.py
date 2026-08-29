@@ -26,6 +26,22 @@ class TestCampaignOrchestration(unittest.TestCase):
         # Patch AI logic
         self.patcher_ai = patch('claude_agent.get_offer_for_segment')
         self.mock_ai = self.patcher_ai.start()
+        
+        self.patcher_strategy = patch('claude_agent.determine_campaign_strategy')
+        self.mock_strategy = self.patcher_strategy.start()
+        self.mock_strategy.return_value = {
+            "business_goal": "Test",
+            "strategy": {"type": "test"},
+            "target_segments": ["loyal"]
+        }
+
+        self.patcher_hist_insights = patch('historical_analyzer.get_historical_learning_insights')
+        self.mock_hist_insights = self.patcher_hist_insights.start()
+        self.mock_hist_insights.return_value = {}
+
+        self.patcher_intelligence = patch('merchant_intelligence.get_merchant_campaign_intelligence')
+        self.mock_intelligence = self.patcher_intelligence.start()
+        self.mock_intelligence.return_value = {}
 
     def tearDown(self):
         self.patcher_merchants.stop()
@@ -33,6 +49,9 @@ class TestCampaignOrchestration(unittest.TestCase):
         self.patcher_customers.stop()
         self.patcher_offers.stop()
         self.patcher_ai.stop()
+        self.patcher_strategy.stop()
+        self.patcher_hist_insights.stop()
+        self.patcher_intelligence.stop()
 
     def test_merchant_not_found(self):
         """Test missing merchant throws 404"""
@@ -75,7 +94,7 @@ class TestCampaignOrchestration(unittest.TestCase):
         # Mock merchant
         self.mock_merchants.find_one.return_value = {
             "merchant_id": "merch_1",
-            "business_rules": {"max_discount_percentage": 50, "min_margin_percentage": 10}
+            "rules": {"max_discount_percentage": 50, "min_margin_percentage": 10}
         }
         
         # No existing campaign
@@ -89,7 +108,7 @@ class TestCampaignOrchestration(unittest.TestCase):
         ]
         
         # Mock AI to generate valid offers (0% for loyal)
-        self.mock_ai.return_value = {"offer": "0% off", "discount_pct": 0}
+        self.mock_ai.return_value = {"reason": "0% off", "recommended_offer_type": "percentage_discount", "confidence": 1.0, "recommended_discount_percentage": 0}
         
         response = client.post("/campaigns", json={
             "merchant_id": "merch_1",

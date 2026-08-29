@@ -51,8 +51,8 @@ class TestOfferGenerationFlow(unittest.TestCase):
     def test_loyal_customer_flow(self):
         """Test valid customer -> segment -> offer generated and stored"""
         self.mock_agent.return_value = {
-            "offer": "Free priority shipping",
-            "discount_pct": 0
+            "reason": "Free priority shipping",
+            "recommended_offer_type": "percentage_discount", "confidence": 1.0, "recommended_discount_percentage": 0
         }
         
         response = client.post("/offers/generate", json={
@@ -77,8 +77,8 @@ class TestOfferGenerationFlow(unittest.TestCase):
     def test_new_visitor_flow(self):
         """Test new visitor -> 10% discount -> stored"""
         self.mock_agent.return_value = {
-            "offer": "10% off first purchase",
-            "discount_pct": 10
+            "reason": "10% off first purchase",
+            "recommended_offer_type": "percentage_discount", "confidence": 1.0, "recommended_discount_percentage": 10
         }
         
         response = client.post("/offers/generate", json={
@@ -98,8 +98,8 @@ class TestOfferGenerationFlow(unittest.TestCase):
     def test_cart_abandoned_flow(self):
         """Test cart abandoned -> segment -> offer generated"""
         self.mock_agent.return_value = {
-            "offer": "₹200 instant coupon",
-            "discount_pct": 5
+            "reason": "₹200 instant coupon",
+            "recommended_offer_type": "percentage_discount", "confidence": 1.0, "recommended_discount_percentage": 5
         }
         
         response = client.post("/offers/generate", json={
@@ -107,6 +107,8 @@ class TestOfferGenerationFlow(unittest.TestCase):
             "customer": {"cart_status": "abandoned", "days_since_last_purchase": 0}
         })
         
+        if response.status_code != 200:
+            print(response.json())
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["segment"], "cart_abandoned")
 
@@ -125,13 +127,13 @@ class TestOfferGenerationFlow(unittest.TestCase):
     def test_ai_excessive_discount_fallback(self):
         """Test AI returning excessive discount triggers fallback logic (or 400 if completely fails)"""
         # We mock get_offer_for_segment. In main.py, it's called first with use_deterministic=False, then True
-        def mock_ai_call(segment, rules, use_deterministic):
+        def mock_ai_call(segment, rules, use_deterministic, **kwargs):
             if not use_deterministic:
                 # Return invalid excessive discount
-                return {"offer": "Crazy 90% off!!", "discount_pct": 90}
+                return {"reason": "Crazy 90% off!!", "recommended_offer_type": "percentage_discount", "confidence": 1.0, "recommended_discount_percentage": 90}
             else:
                 # Fallback returns safe discount
-                return {"offer": "Safe 10% off", "discount_pct": 10}
+                return {"reason": "Safe 10% off", "recommended_offer_type": "percentage_discount", "confidence": 1.0, "recommended_discount_percentage": 10}
                 
         self.mock_agent.side_effect = mock_ai_call
         

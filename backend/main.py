@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, Any, Dict
 from dotenv import load_dotenv
-from database import merchants_collection, offers_collection, orders_collection, campaigns_collection, customers_collection
+from database import merchants_collection, offers_collection, orders_collection, campaigns_collection, customers_collection, optimizations_collection
 from offer_service import generate_personalized_offer
 import uuid
 from datetime import datetime, timezone
@@ -63,6 +63,78 @@ def login(request: LoginRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail="Internal Server Error")
 
+class OfferRecommendationRequest(BaseModel):
+    merchant_id: str
+    customer: CustomerProfile
+    campaign_id: Optional[str] = None
+
+class OfferRecommendationResponse(BaseModel):
+    customer_id: Optional[str] = None
+    campaign_id: Optional[str] = None
+    segment: str
+    recommended_offer_type: str
+    recommended_discount_percentage: float
+    reason: str
+    confidence: float
+    guardrail_status: str
+
+@app.post("/offers/recommend", response_model=OfferRecommendationResponse)
+def recommend_offer(request: OfferRecommendationRequest):
+    """Authoritative recommendation endpoint using AI and Guardrails without persistence"""
+    try:
+        # Step 1: Validate merchant
+        merchant = merchants_collection.find_one({"merchant_id": request.merchant_id})
+        if not merchant:
+            raise HTTPException(status_code=404, detail="Merchant not found")
+            
+        # Step 2: Retrieve merchant rules (default fallback if missing)
+        merchant_rules = merchant.get("rules", {
+            "max_discount_percentage": 20.0,
+            "min_margin_percentage": 30.0
+        })
+        
+        # Step 3: Validate customer exists
+        # In a real system, you might fetch customer from customers_collection,
+        # but here we accept the provided profile or fetch if ID provided.
+        customer_dict = request.customer.model_dump(exclude_unset=True) if hasattr(request.customer, 'model_dump') else request.customer.dict(exclude_unset=True)
+        if "id" in customer_dict:
+            db_cust = customers_collection.find_one({"id": customer_dict["id"]})
+            if db_cust:
+                customer_dict.update(db_cust)
+            else:
+                raise HTTPException(status_code=404, detail="Customer not found")
+                
+        # Step 4: Retrieve campaign context if campaign_id provided
+        campaign_context = None
+        if request.campaign_id:
+            campaign = campaigns_collection.find_one({"campaign_id": request.campaign_id, "merchant_id": request.merchant_id})
+            if not campaign:
+                raise HTTPException(status_code=404, detail="Campaign not found")
+            campaign_context = {
+                "name": campaign.get("campaign_name", "Unknown"),
+                "description": campaign.get("campaign_description", ""),
+                "target": campaign.get("target_segment", "All")
+            }
+
+        from decision_engine import recommend_offer_strategy
+        
+        # Steps 5-11 handled in decision_engine.py
+        decision = recommend_offer_strategy(
+            merchant_id=request.merchant_id,
+            customer=customer_dict,
+            merchant_rules=merchant_rules,
+            campaign_context=campaign_context,
+            campaign_id=request.campaign_id
+        )
+        
+        return decision
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error in recommend_offer: {e}")
+        raise HTTPException(status_code=500, detail="Internal Server Error")
+
 class OfferGenerationRequest(BaseModel):
     merchant_id: str
     customer: CustomerProfile
@@ -99,28 +171,23 @@ def generate_offer(request: OfferGenerationRequest):
         else:
             customer_dict = request.customer.dict(exclude_unset=True)
             
-        # Step 3: Deterministic segmentation
-        from segmentation import segment_customer
-        segment = segment_customer(customer_dict)
-        
-        # Step 4: AI Offer generation
-        from claude_agent import get_offer_for_segment
+        # Step 3, 4, 5: AI Offer Decision Engine
+        from decision_engine import run_offer_decision_engine
         try:
-            ai_offer = get_offer_for_segment(segment, merchant_rules, use_deterministic=False, customer_context=customer_dict)
-            if not ai_offer or "discount_pct" not in ai_offer:
-                raise ValueError("Invalid response from AI")
+            decision = run_offer_decision_engine(
+                merchant_id=request.merchant_id,
+                customer=customer_dict,
+                merchant_rules=merchant_rules
+            )
+        except ValueError as ve:
+            raise HTTPException(status_code=400, detail=str(ve))
         except Exception as e:
+            import traceback
+            traceback.print_exc()
+            print(f"Error in generate_offer: {repr(e)}")
             raise HTTPException(status_code=500, detail="AI generation failed")
-            
-        # Step 5: Validate offer
-        from guardrails import validate_offer
-        is_valid = validate_offer(ai_offer, merchant_rules, customer_dict)
         
-        # If AI returns excessive discount, handle safely via deterministic fallback
-        if not is_valid:
-            ai_offer = get_offer_for_segment(segment, merchant_rules, use_deterministic=True)
-            if not validate_offer(ai_offer, merchant_rules, customer_dict):
-                raise HTTPException(status_code=400, detail="Generated offer violated merchant rules")
+        segment = decision["segment"]
                 
         # Step 6: Store in MongoDB
         offer_id = str(uuid.uuid4())
@@ -129,9 +196,9 @@ def generate_offer(request: OfferGenerationRequest):
             "merchant_id": request.merchant_id,
             "customer_id": customer_dict.get("id"),
             "customer_segment": segment,
-            "offer_description": ai_offer.get("offer", ""),
-            "discount_percentage": float(ai_offer.get("discount_pct", 0)),
-            "explanation": ai_offer.get("reasoning", ""),
+            "offer_description": decision["offer_details"],
+            "discount_percentage": decision["discount_percentage"],
+            "explanation": decision["explanation"],
             "status": "OFFER_CREATED",
             "created_at": datetime.now(timezone.utc).isoformat()
         }
@@ -143,11 +210,11 @@ def generate_offer(request: OfferGenerationRequest):
             "customer_id": customer_dict.get("id"),
             "merchant_id": request.merchant_id,
             "segment": segment,
-            "offer_details": ai_offer.get("offer", ""),
+            "offer_details": decision["offer_details"],
             "offer_status": "OFFER_CREATED",
-            "discount_percentage": float(ai_offer.get("discount_pct", 0)),
+            "discount_percentage": decision["discount_percentage"],
             "creation_timestamp": offer_doc["created_at"],
-            "explanation": ai_offer.get("reasoning", "")
+            "explanation": decision["explanation"]
         }
     except HTTPException:
         raise
@@ -159,7 +226,7 @@ class CampaignCreateRequest(BaseModel):
     merchant_id: str
     campaign_name: str
     campaign_description: Optional[str] = ""
-    target_segment: str
+    target_segment: str = "auto"
 
 class CampaignResponse(BaseModel):
     campaign_id: str
@@ -169,6 +236,8 @@ class CampaignResponse(BaseModel):
     status: str
     offers_generated: int
     created_at: str
+    offers: Optional[Dict[str, Any]] = {}
+    strategy: Optional[Dict[str, Any]] = None
 
 @app.post("/campaigns", response_model=CampaignResponse)
 def create_campaign(request: CampaignCreateRequest):
@@ -211,19 +280,20 @@ def create_campaign(request: CampaignCreateRequest):
         campaigns_collection.insert_one(campaign_doc)
         
         # Step 2: Load business rules
-        merchant_rules = merchant.get("business_rules", {})
+        merchant_rules = merchant.get("rules", {})
         
         # Fetch target customers
-        # For this prototype, we'll fetch all customers if target_segment == 'all', else filter by deterministic segment
-        # Since deterministic segment isn't pre-computed in `customers_collection` usually, we fetch all and filter in memory
-        all_customers = list(customers_collection.find())
+        all_customers = list(customers_collection.find({"merchant_id": request.merchant_id}))
         target_customers = []
         
+        from decision_engine import run_offer_decision_engine
         from segmentation import segment_customer
-        from claude_agent import get_offer_for_segment
-        from guardrails import validate_offer
+        from historical_analyzer import get_historical_learning_insights
+        from merchant_intelligence import get_merchant_campaign_intelligence
+        from claude_agent import determine_campaign_strategy
         
-        # We process customers to determine targets
+        # We process customers to determine segments and stats
+        all_segments_data = {}
         for cust in all_customers:
             cust_dict = {
                 "id": str(cust.get("_id", cust.get("id"))),
@@ -233,52 +303,116 @@ def create_campaign(request: CampaignCreateRequest):
                 "cart_status": cust.get("cart_status", "browsing"),
                 "average_order_value": cust.get("average_order_value", 0)
             }
-            
-            # Deterministic segment
             segment = segment_customer(cust_dict)
-            if request.target_segment.lower() == "all" or segment == request.target_segment.lower():
-                target_customers.append((cust_dict, segment))
+            if segment not in all_segments_data:
+                all_segments_data[segment] = {"customers": [], "stats": {}}
+            all_segments_data[segment]["customers"].append(cust_dict)
+            
+        # Aggregate stats per segment for AI context
+        for segment, data in all_segments_data.items():
+            customers = data["customers"]
+            data["stats"] = {
+                "segment_name": segment,
+                "customer_count": len(customers),
+                "average_lifetime_value": sum(c.get("lifetime_value", 0) for c in customers) / len(customers) if customers else 0,
+                "average_purchase_count": sum(c.get("purchase_count", 0) for c in customers) / len(customers) if customers else 0,
+                "cart_abandoned_count": sum(1 for c in customers if c.get("cart_status") == "abandoned")
+            }
+            
+        # Strategy Generation
+        historical_learning = get_historical_learning_insights(request.merchant_id)
+        intelligence = get_merchant_campaign_intelligence(request.merchant_id)
+        
+        strategy_context = {
+            "merchant_rules": merchant_rules,
+            "segment_stats": {k: v["stats"] for k, v in all_segments_data.items()},
+            "historical_learning": historical_learning,
+            "campaign_intelligence": intelligence
+        }
+        
+        strategy_decision = determine_campaign_strategy(
+            goal=request.campaign_description or request.campaign_name,
+            merchant_context=strategy_context
+        )
+        
+        ai_target_segments = strategy_decision.get("target_segments", [])
+        
+        # Filter segments to target
+        segments_data = {}
+        if request.target_segment.lower() in ["all", "auto"]:
+            # Use AI selected segments
+            for seg in ai_target_segments:
+                if seg in all_segments_data:
+                    segments_data[seg] = all_segments_data[seg]
+            # Fallback if AI selected nothing but we need something
+            if not segments_data and all_segments_data:
+                # Safest fallback is existing segments
+                segments_data = all_segments_data
+        else:
+            # Respect explicit manual selection
+            explicit_seg = request.target_segment.lower()
+            if explicit_seg in all_segments_data:
+                segments_data[explicit_seg] = all_segments_data[explicit_seg]
+        for segment, data in segments_data.items():
+            customers = data["customers"]
+            data["stats"] = {
+                "segment_name": segment,
+                "customer_count": len(customers),
+                "average_lifetime_value": sum(c.get("lifetime_value", 0) for c in customers) / len(customers) if customers else 0,
+                "average_purchase_count": sum(c.get("purchase_count", 0) for c in customers) / len(customers) if customers else 0,
+                "cart_abandoned_count": sum(1 for c in customers if c.get("cart_status") == "abandoned")
+            }
                 
         offers_generated = 0
         failed_generations = 0
+        generated_offers = {}
         
-        for cust_dict, segment in target_customers:
+        # Generate exactly ONE offer per segment, then apply to all customers in segment
+        for segment, data in segments_data.items():
             try:
-                # Step 5: AI Offer Generation
+                # Step 5 & 6: AI Offer Decision Engine
                 campaign_context = {
                     "name": request.campaign_name,
                     "description": request.campaign_description,
-                    "target": request.target_segment
+                    "target": request.target_segment,
+                    "strategy": strategy_decision
                 }
-                ai_offer = get_offer_for_segment(segment, merchant_rules, use_deterministic=False, customer_context=cust_dict, campaign_context=campaign_context)
-                if not ai_offer or "discount_pct" not in ai_offer:
-                    raise ValueError("Invalid response from AI")
-                    
-                # Step 6: Guardrails
-                is_valid = validate_offer(ai_offer, merchant_rules, cust_dict)
-                if not is_valid:
-                    ai_offer = get_offer_for_segment(segment, merchant_rules, use_deterministic=True)
-                    if not validate_offer(ai_offer, merchant_rules, cust_dict):
-                        raise ValueError("Guardrails blocked even deterministic fallback")
+                decision = run_offer_decision_engine(
+                    merchant_id=request.merchant_id,
+                    segment=segment,
+                    segment_stats=data["stats"],
+                    merchant_rules=merchant_rules,
+                    campaign_context=campaign_context
+                )
                 
-                # Persist Offer linked to Campaign
-                offer_doc = {
-                    "offer_id": str(uuid.uuid4()),
-                    "campaign_id": campaign_id,
-                    "merchant_id": request.merchant_id,
-                    "customer_id": cust_dict["id"],
-                    "customer_segment": segment,
-                    "offer_description": ai_offer.get("offer", ""),
-                    "discount_percentage": float(ai_offer.get("discount_pct", 0)),
-                    "explanation": ai_offer.get("reasoning", ""),
-                    "status": "OFFER_CREATED",
-                    "created_at": datetime.now(timezone.utc).isoformat()
+                # Keep one sample offer per segment for the UI response and final campaign document
+                generated_offers[segment] = {
+                    "discount_pct": decision["discount_percentage"],
+                    "offer": decision["offer_details"],
+                    "reasoning": decision["explanation"]
                 }
-                offers_collection.insert_one(offer_doc)
-                offers_generated += 1
+                
+                # Persist Offer linked to Campaign for EVERY customer in this segment
+                for cust_dict in data["customers"]:
+                    offer_doc = {
+                        "offer_id": str(uuid.uuid4()),
+                        "campaign_id": campaign_id,
+                        "merchant_id": request.merchant_id,
+                        "customer_id": cust_dict["id"],
+                        "customer_segment": segment,
+                        "offer_description": decision["offer_details"],
+                        "discount_percentage": decision["discount_percentage"],
+                        "explanation": decision["explanation"],
+                        "status": "OFFER_CREATED",
+                        "created_at": datetime.now(timezone.utc).isoformat()
+                    }
+                    offers_collection.insert_one(offer_doc)
+                    offers_generated += 1
                 
             except Exception as e:
-                print(f"Failed to generate offer for customer {cust_dict.get('id')}: {e}")
+                import traceback
+                traceback.print_exc()
+                print(f"Failed to generate offer for segment {segment}: {e}")
                 failed_generations += 1
                 
         # Finalize Campaign
@@ -287,6 +421,7 @@ def create_campaign(request: CampaignCreateRequest):
             {"campaign_id": campaign_id},
             {"$set": {
                 "status": final_status,
+                "target_segments": list(generated_offers.keys()),
                 "updated_at": datetime.now(timezone.utc).isoformat()
             }}
         )
@@ -298,7 +433,9 @@ def create_campaign(request: CampaignCreateRequest):
             "target_segment": request.target_segment,
             "status": final_status,
             "offers_generated": offers_generated,
-            "created_at": campaign_doc["created_at"]
+            "created_at": campaign_doc["created_at"],
+            "offers": generated_offers,
+            "strategy": strategy_decision
         }
         
     except HTTPException:
@@ -351,16 +488,25 @@ def get_campaign_analytics_route(campaign_id: str, merchant_id: str = Query(...)
     return analytics
 
 @app.get("/campaigns/{campaign_id}/analytics/segments")
-def get_campaign_segment_analytics_route(campaign_id: str, merchant_id: str = Query(...)):
+def get_campaign_analytics_segments_route(campaign_id: str, merchant_id: str = Query(...)):
+    """Get segment-level analytics for a campaign"""
     campaign = campaigns_collection.find_one({"campaign_id": campaign_id, "merchant_id": merchant_id})
     if not campaign:
         raise HTTPException(status_code=404, detail="Campaign not found")
-
+        
     from analytics import get_campaign_segment_analytics
-    segments = get_campaign_segment_analytics(campaign_id)
-    if segments is None:
-        raise HTTPException(status_code=404, detail="Campaign not found")
-    return segments
+    stats = get_campaign_segment_analytics(campaign_id)
+    return stats or []
+
+@app.get("/merchants/{merchant_id}/historical-performance")
+def get_historical_performance_route(merchant_id: str):
+    from analytics import get_merchant_historical_performance
+    return get_merchant_historical_performance(merchant_id)
+
+@app.get("/merchants/{merchant_id}/historical-performance/segments")
+def get_historical_performance_segments_route(merchant_id: str):
+    from analytics import get_merchant_segment_performance
+    return get_merchant_segment_performance(merchant_id)
 
 @app.get("/campaigns/{campaign_id}/insights")
 def get_campaign_insights(campaign_id: str, merchant_id: str = Query(...)):
@@ -729,3 +875,107 @@ def get_campaigns(
         "limit": limit,
         "total": total
     }
+
+@app.post("/campaigns/{campaign_id}/optimize")
+def optimize_campaign_route(campaign_id: str, merchant_id: str = Query(...)):
+    """Generate optimization recommendations for a campaign"""
+    try:
+        from optimization_agent import analyze_campaign_for_optimization
+        
+        result = analyze_campaign_for_optimization(
+            campaign_id=campaign_id,
+            merchant_id=merchant_id
+        )
+        return result
+    except ValueError as ve:
+        raise HTTPException(status_code=404, detail=str(ve))
+    except Exception as e:
+        print(f"Error in optimize_campaign_route: {e}")
+        raise HTTPException(status_code=500, detail="Internal Server Error")
+
+@app.get("/optimizations")
+def get_optimizations_route(merchant_id: str = Query(...)):
+    """Fetch all optimizations for a merchant's campaigns"""
+    try:
+        # Sort by generated_at descending (newest first)
+        cursor = optimizations_collection.find({"merchant_id": merchant_id}, {"_id": 0}).sort("generated_at", -1)
+        return list(cursor)
+    except Exception as e:
+        print(f"Error in get_optimizations_route: {e}")
+        raise HTTPException(status_code=500, detail="Internal Server Error")
+
+@app.post("/optimizations/{optimization_id}/approve")
+def approve_optimization_route(optimization_id: str, merchant_id: str = Query(...)):
+    try:
+        from optimization_execution import approve_optimization
+        return approve_optimization(optimization_id, merchant_id)
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="Internal Server Error")
+
+class RejectionRequest(BaseModel):
+    reason: Optional[str] = None
+
+@app.post("/optimizations/{optimization_id}/reject")
+def reject_optimization_route(optimization_id: str, request: RejectionRequest, merchant_id: str = Query(...)):
+    try:
+        from optimization_execution import reject_optimization
+        return reject_optimization(optimization_id, merchant_id, request.reason)
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="Internal Server Error")
+
+@app.post("/optimizations/{optimization_id}/execute")
+def execute_optimization_route(optimization_id: str, merchant_id: str = Query(...)):
+    try:
+        from optimization_execution import execute_optimization
+        return execute_optimization(optimization_id, merchant_id)
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="Internal Server Error")
+
+@app.post("/optimizations/{optimization_id}/feedback")
+def evaluate_optimization_feedback_route(optimization_id: str, merchant_id: str = Query(...)):
+    """Evaluate and record the performance of an executed optimization."""
+    try:
+        from feedback_service import evaluate_optimization_outcome
+        return evaluate_optimization_outcome(optimization_id, merchant_id)
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+    except Exception as e:
+        print(f"Error in evaluate_optimization_feedback_route: {e}")
+        raise HTTPException(status_code=500, detail="Internal Server Error")
+
+@app.get("/merchants/{merchant_id}/intelligence")
+def get_merchant_intelligence_route(merchant_id: str):
+    """Retrieve multi-campaign intelligence and AI insights for a merchant."""
+    try:
+        from merchant_intelligence import get_merchant_campaign_intelligence
+        return get_merchant_campaign_intelligence(merchant_id)
+    except ValueError as ve:
+        if str(ve) == "Merchant not found":
+            raise HTTPException(status_code=404, detail="Merchant not found")
+        raise HTTPException(status_code=400, detail=str(ve))
+    except Exception as e:
+        print(f"Error in get_merchant_intelligence_route: {e}")
+        raise HTTPException(status_code=500, detail="Internal Server Error")
+
+class AgentRunRequest(BaseModel):
+    merchant_id: str
+
+@app.post("/agent/run")
+def run_revenue_agent_route(request: AgentRunRequest):
+    """Run the holistic AI Revenue Agent to get an evidence-based campaign strategy."""
+    try:
+        from revenue_agent import run_revenue_agent
+        return run_revenue_agent(request.merchant_id)
+    except ValueError as ve:
+        if str(ve) == "Merchant not found":
+            raise HTTPException(status_code=404, detail="Merchant not found")
+        raise HTTPException(status_code=400, detail=str(ve))
+    except Exception as e:
+        print(f"Error in run_revenue_agent_route: {e}")
+        raise HTTPException(status_code=500, detail="Internal Server Error")
