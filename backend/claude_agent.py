@@ -4,6 +4,30 @@ from dotenv import load_dotenv
 import os
 from typing import Dict, Any
 
+def parse_json_safely(text: str) -> Any:
+    text = text.strip()
+    if text.startswith("```json"):
+        text = text[7:]
+    elif text.startswith("```"):
+        text = text[3:]
+    if text.endswith("```"):
+        text = text[:-3]
+    text = text.strip()
+    
+    try:
+        return json.loads(text)
+    except Exception as e:
+        print(f"JSON parsing error: {e}")
+        import re
+        # Attempt to extract JSON from surrounding conversational text
+        match = re.search(r'(\{.*\}|\[.*\])', text, re.DOTALL)
+        if match:
+            try:
+                return json.loads(match.group(1))
+            except:
+                pass
+        return {}
+
 load_dotenv()
 
 # Lazy initialization - client created only when needed
@@ -24,173 +48,175 @@ def get_client():
         )
     return client
 
-SYSTEM_PROMPT = """You are an AI revenue optimization agent for a merchant.
+SYSTEM_PROMPT = """You are an AI Campaign Intelligence Engine for a merchant.
 
-Your job is to recommend a campaign offer that is appropriate for the target customer segment while respecting the merchant's business constraints.
+Your job is to read the campaign goal, merchant constraints, and actual customer data, and dynamically group customers into meaningful segments.
+Do not force customers into predefined buckets unless the data and goal support it. 
+You can create segments like "High-Value Cart Abandoners", "Price-Sensitive Recent Buyers", "VIP Summer Shoppers", etc.
+Only create a segment if there are actual customers that fit the criteria.
+Assign the exact customer IDs to the segments they belong to. A customer can only belong to one segment.
+Every segment MUST respect the merchant rules (e.g. max_discount_percentage, min_margin_percentage).
+If a segment does not warrant an offer or discount, provide 0 discount.
 
-If a specific campaign strategy (e.g. 'win-back', 'retention') is provided in the Campaign Context, formulate an offer that actively executes this strategy.
-
-Use the provided customer behavior and campaign goal.
-
-Consider historical learning insights if provided. Do NOT claim "historically this worked" unless the backend supplied historical evidence supporting that statement in the historical context block.
-
-Never exceed the maximum allowed discount.
-
-Never recommend an offer that violates the minimum margin requirement.
-
-Return structured JSON only.
-
-For each segment, respond in JSON ONLY using this schema:
+Respond strictly with valid JSON matching this schema exactly:
 {
-  "segment": "...",
-  "offer": "...",
-  "discount_pct": 0,
-  "reason": "...",
-  "priority": "low|medium|high"
+  "segments": [
+    {
+      "segment": "Name of the dynamic segment",
+      "segment_description": "Why these customers were grouped together based on their data",
+      "customer_ids": ["cust_001", "cust_002"],
+      "strategy": "The strategic approach (e.g., win-back, retention)",
+      "offer": "The specific offer/incentive wording",
+      "discount_pct": 0,
+      "duration_days": 7,
+      "reasoning": "Why this specific offer works for this segment",
+      "data_evidence": ["Evidence 1 from data", "Evidence 2 from data"],
+      "merchant_constraints": ["Rule 1 applied"],
+      "expected_objective": "What is the expected outcome",
+      "confidence": "high|medium|low"
+    }
+  ]
 }
 """
 
-def get_offer_for_segment(
-    segment: str, 
-    merchant_rules: dict, 
-    use_deterministic: bool = False,
-    customer_context: dict = None,
-    campaign_context: dict = None,
-    historical_context: dict = None
+def generate_dynamic_fallback(customers: list, merchant_rules: dict, goal: str) -> dict:
+    """Generates a dynamic fallback clustering if AI is offline."""
+    goal_lower = goal.lower()
+    
+    is_acquisition = 'acquire' in goal_lower or 'new' in goal_lower
+    is_winback = 'win' in goal_lower or 'dormant' in goal_lower or 're-engage' in goal_lower
+    is_retention = 'summer' in goal_lower or 'promote' in goal_lower
+    
+    segments = []
+    
+    # Simple deterministic clustering based on goal
+    if is_winback:
+        dormant_ids = [c["id"] for c in customers if c.get("days_since_last_purchase", 0) > 60]
+        if dormant_ids:
+            segments.append({
+                "segment": "Dormant Customers",
+                "segment_description": "Customers who haven't purchased in >60 days",
+                "customer_ids": dormant_ids,
+                "strategy": "Win-back / Reactivation",
+                "offer": f"{min(25, merchant_rules.get('max_discount_percentage', 20))}% off to return",
+                "discount_pct": min(25, merchant_rules.get("max_discount_percentage", 20)),
+                "duration_days": 7,
+                "reasoning": "High discount to break dormancy",
+                "data_evidence": [f"{len(dormant_ids)} customers found with >60 days since last purchase"],
+                "merchant_constraints": [f"Max discount {merchant_rules.get('max_discount_percentage', 20)}%"],
+                "expected_objective": "Reactivation",
+                "confidence": "medium"
+            })
+            
+    elif is_acquisition:
+        new_ids = [c["id"] for c in customers if c.get("purchase_count", 0) == 0]
+        if new_ids:
+            segments.append({
+                "segment": "New Prospects",
+                "segment_description": "Customers with 0 previous purchases",
+                "customer_ids": new_ids,
+                "strategy": "First-time Conversion",
+                "offer": f"{min(20, merchant_rules.get('max_discount_percentage', 20))}% off first purchase",
+                "discount_pct": min(20, merchant_rules.get("max_discount_percentage", 20)),
+                "duration_days": 3,
+                "reasoning": "Strong incentive for first purchase",
+                "data_evidence": [f"{len(new_ids)} customers with 0 purchases"],
+                "merchant_constraints": [f"Max discount {merchant_rules.get('max_discount_percentage', 20)}%"],
+                "expected_objective": "First Purchase",
+                "confidence": "high"
+            })
+            
+    else:
+        # Default retention / engagement
+        loyal_ids = [c["id"] for c in customers if c.get("purchase_count", 0) >= 3]
+        if loyal_ids:
+            segments.append({
+                "segment": "Loyal Shoppers",
+                "segment_description": "Customers with >=3 purchases",
+                "customer_ids": loyal_ids,
+                "strategy": "VIP Retention",
+                "offer": "Early Access & VIP Treatment",
+                "discount_pct": 0,
+                "duration_days": 14,
+                "reasoning": "Reward loyalty with access, preserving margins",
+                "data_evidence": [f"{len(loyal_ids)} customers with >=3 purchases"],
+                "merchant_constraints": ["Margin preservation for frequent buyers"],
+                "expected_objective": "Increase LTV",
+                "confidence": "high"
+            })
+            
+    # Catch-all for unassigned customers
+    assigned = set()
+    for s in segments:
+        assigned.update(s["customer_ids"])
+    
+    remaining_ids = [c["id"] for c in customers if c["id"] not in assigned]
+    if remaining_ids:
+        segments.append({
+            "segment": "General Audience",
+            "segment_description": "Remaining active customers",
+            "customer_ids": remaining_ids,
+            "strategy": "Standard Engagement",
+            "offer": f"{min(10, merchant_rules.get('max_discount_percentage', 10))}% off next order",
+            "discount_pct": min(10, merchant_rules.get("max_discount_percentage", 10)),
+            "duration_days": 7,
+            "reasoning": "Broad incentive for general engagement",
+            "data_evidence": [f"{len(remaining_ids)} remaining customers"],
+            "merchant_constraints": [f"Max discount {merchant_rules.get('max_discount_percentage', 10)}%"],
+            "expected_objective": "Incremental Sales",
+            "confidence": "low"
+        })
+        
+    return {"segments": segments}
+
+
+def generate_campaign_intelligence(
+    goal: str,
+    customers: list,
+    merchant_rules: dict,
+    historical_context: dict = None,
+    use_deterministic: bool = False
 ) -> dict:
     """
-    Call OpenRouter API to get offer for a segment.
-    Uses openai/gpt-oss-20b:free (free open-source model via OpenRouter).
-    Falls back to deterministic offers if API fails or use_deterministic=True.
-    
-    Args:
-        segment: "loyal", "new_visitor", etc
-        merchant_rules: {"max_discount_percentage": 20, ...}
-        use_deterministic: If True, use hardcoded offers instead of API
-        customer_context: Optional dictionary with actual customer behavioral data
-        campaign_context: Optional dictionary with campaign specifics
-        historical_context: Optional dictionary with historical performance data
-    
-    Returns:
-        dict with offer details
+    Call OpenRouter API to analyze all customers, group them into data-driven segments,
+    and generate tailored offers based on the campaign goal.
     """
-    
-    # Deterministic fallback offers for zero-cost operation
-    DETERMINISTIC_OFFERS = {
-        "loyal": {
-            "recommended_offer_type": "free_shipping",
-            "recommended_discount_percentage": 0,
-            "reason": "Loyal customers have high lifetime value. Preserve margin with free shipping instead of discount.",
-            "confidence": 1.0
-        },
-        "new_visitor": {
-            "recommended_offer_type": "percentage_discount",
-            "recommended_discount_percentage": 10,
-            "reason": "New visitors need incentive to convert. 10% discount is under max 20% and preserves margin.",
-            "confidence": 1.0
-        },
-        "cart_abandoned": {
-            "recommended_offer_type": "flat_discount",
-            "recommended_discount_percentage": 5,
-            "reason": "Cart abandoned customers are ready to buy. Small coupon recovers lost sale without excessive discount.",
-            "confidence": 1.0
-        },
-        "high_value": {
-            "recommended_offer_type": "premium_upgrade",
-            "recommended_discount_percentage": 0,
-            "reason": "High-value customers don't need discounts. Offer premium products/services to increase order value.",
-            "confidence": 1.0
-        },
-        "price_sensitive": {
-            "recommended_offer_type": "percentage_discount",
-            "recommended_discount_percentage": 15,
-            "reason": "Price-sensitive segment responds to discounts. 15% on bulk purchases increases volume.",
-            "confidence": 1.0
-        },
-        "dormant": {
-            "recommended_offer_type": "percentage_discount",
-            "recommended_discount_percentage": 20,
-            "reason": "Dormant customers need strong incentive to return. Max discount + gift creates urgency.",
-            "confidence": 1.0
-        },
-        "regular": {
-            "recommended_offer_type": "loyalty_points",
-            "recommended_discount_percentage": 5,
-            "reason": "Regular customers are stable. Loyalty program keeps them engaged without high discount.",
-            "confidence": 1.0
-        }
-    }
-    
-    # Use deterministic offers if requested
-    if use_deterministic:
-        return DETERMINISTIC_OFFERS.get(segment, DETERMINISTIC_OFFERS["regular"])
-    
-    # Format historical context appropriately, handling cold start
-    historical_summary = "None provided."
-    if historical_context:
-        overall = historical_context.get("overall", {})
-        if overall.get("total_campaigns", 0) == 0:
-            historical_summary = "No historical campaign data available yet for this merchant."
-        else:
-            # We want to provide a compact summary
-            segments = historical_context.get("segments", [])
-            segment_data = next((s for s in segments if s.get("segment") == segment), None)
-            
-            summary = {
-                "overall_completed_campaigns": overall.get("completed_campaigns", 0),
-                "overall_conversion_rate": overall.get("conversion_rate", 0),
-            }
-            if segment_data:
-                summary["segment_conversion_rate"] = segment_data.get("conversion_rate", 0)
-                summary["segment_offers_sent"] = segment_data.get("total_offers", 0)
-                
-            learning = historical_context.get("learning_insights")
-            if learning:
-                summary["learning_insights"] = {
-                    "best_segments": learning.get("best_segments", []),
-                    "weak_segments": learning.get("weak_segments", []),
-                    "performance_patterns": learning.get("performance_patterns", [])
-                }
-                
-            historical_summary = json.dumps(summary)
-            
+    if use_deterministic or not customers:
+        return generate_dynamic_fallback(customers, merchant_rules, goal)
+        
+    # Anonymize/minify customer data to save tokens
+    minified_customers = []
+    for c in customers:
+        minified_customers.append({
+            "id": c.get("id"),
+            "purchase_count": c.get("purchase_count", 0),
+            "days_since_last_purchase": c.get("days_since_last_purchase", 999),
+            "lifetime_value": c.get("lifetime_value", 0),
+            "cart_status": c.get("cart_status", "browsing"),
+            "average_order_value": c.get("average_order_value", 0)
+        })
+        
     user_message = f"""
-    Segment: {segment}
+    Campaign Goal: {goal}
+    
+    Merchant Constraints:
     Max discount allowed: {merchant_rules.get('max_discount_percentage', 20)}%
     Min margin required: {merchant_rules.get('min_margin_percentage', 30)}%
     
-    Customer Context (Historical Behavior):
-    {json.dumps(customer_context) if customer_context else 'None provided.'}
+    Customer Dataset:
+    {json.dumps(minified_customers)}
     
-    Campaign Context:
-    {json.dumps(campaign_context) if campaign_context else 'None provided.'}
-    
-    Merchant Historical Performance:
-    {historical_summary}
-    
-    What offer should this segment get based on this specific context?
+    Based on the goal and dataset, group the customers into dynamic segments and recommend an offer for each.
     """
     
     try:
         model_used = "openrouter/free"
         
-        # Safe logging implementation
-        def redact_sensitive(obj):
-            if isinstance(obj, dict):
-                return {k: ("***REDACTED***" if any(s in k.lower() for s in ["password", "secret", "key", "uri", "email", "phone", "address", "auth", "token"]) else redact_sensitive(v)) for k, v in obj.items()}
-            elif isinstance(obj, list):
-                return [redact_sensitive(item) for item in obj]
-            return obj
-
         safe_context = {
-            "campaign": redact_sensitive(campaign_context) if campaign_context else "None provided",
-            "analytics": "Not used in this request",
-            "segment_performance": "Not used in this request",
-            "historical_performance": redact_sensitive(historical_context) if historical_context else "None provided",
-            "merchant_rules": redact_sensitive(merchant_rules),
-            "customer_context": redact_sensitive(customer_context) if customer_context else "None provided",
-            "system_prompt": SYSTEM_PROMPT,
-            "user_prompt": user_message
+            "campaign_goal": goal,
+            "merchant_rules": merchant_rules,
+            "customer_count": len(minified_customers),
+            "system_prompt": SYSTEM_PROMPT
         }
         
         print("\n===== OPENROUTER AI CONTEXT =====")
@@ -198,11 +224,10 @@ def get_offer_for_segment(
         print("===== END OPENROUTER AI CONTEXT =====")
         print(f"Model used: {model_used}\n")
         
-        # Try to call OpenRouter API
         openai_client = get_client()
         response = openai_client.chat.completions.create(
             model=model_used,
-            max_tokens=500,
+            max_tokens=1500,
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_message}
@@ -211,41 +236,19 @@ def get_offer_for_segment(
         
         response_text = response.choices[0].message.content
         
-        # Try to parse JSON
         try:
-            offer = json.loads(response_text)
-        except:
-            # Fallback if not valid JSON
-            offer = {
-                "segment": segment,
-                "offer": "10% Discount",
-                "discount_pct": 10,
-                "reason": response_text,
-                "priority": "medium"
-            }
-        
-        return offer
-        
+            intelligence = parse_json_safely(response_text)
+            if "segments" not in intelligence:
+                raise ValueError("Missing 'segments' key in AI response")
+            return intelligence
+        except Exception as e:
+            print(f"[Note] Failed to parse AI JSON ({e}), using fallback")
+            return generate_dynamic_fallback(customers, merchant_rules, goal)
+            
     except Exception as e:
-        # If API fails, fall back to deterministic offers
-        print(f"[Note] OpenRouter API unavailable ({type(e).__name__}), using deterministic offers")
-        return DETERMINISTIC_OFFERS.get(segment, DETERMINISTIC_OFFERS["regular"])
+        print(f"[Note] OpenRouter API unavailable ({type(e).__name__}), using fallback")
+        return generate_dynamic_fallback(customers, merchant_rules, goal)
 
-
-# Test
-if __name__ == "__main__":
-    merchant_rules = {
-        "max_discount_percentage": 20,
-        "min_margin_percentage": 30
-    }
-    
-    segments = ["loyal", "new_visitor", "cart_abandoned"]
-    
-    for segment in segments:
-        offer = get_offer_for_segment(segment, merchant_rules)
-        print(f"\n{segment.upper()}:")
-        print(f"  Offer: {offer.get('offer')}")
-        print(f"  Discount: {offer.get('discount_pct')}%")
 
 def generate_campaign_insights(campaign_data: dict, analytics: dict, segments_analytics: list) -> dict:
     """
@@ -323,7 +326,7 @@ Respond ONLY with a JSON object in this exact structure:
         )
         
         response_text = response.choices[0].message.content
-        return json.loads(response_text)
+        return parse_json_safely(response_text)
         
     except Exception as e:
         print(f"[Note] Campaign Insights API unavailable: {e}")
@@ -422,7 +425,7 @@ discount_adjustment, segment_targeting, offer_type_change, campaign_timing, audi
         )
         
         response_text = response.choices[0].message.content
-        return json.loads(response_text)
+        return parse_json_safely(response_text)
         
     except Exception as e:
         print(f"[Note] Optimization API unavailable or failed to parse JSON: {e}")
@@ -478,7 +481,7 @@ Ensure your response is valid JSON matching this schema exactly:
         )
         
         content = completion.choices[0].message.content
-        return json.loads(content)
+        return parse_json_safely(content)
     except Exception as e:
         print(f"[Note] Feedback API unavailable or failed to parse JSON: {e}")
         return {
@@ -529,7 +532,7 @@ Ensure your response is valid JSON matching this schema exactly:
         )
         
         content = completion.choices[0].message.content
-        return json.loads(content)
+        return parse_json_safely(content)
     except Exception as e:
         print(f"[Note] Merchant insights API unavailable or failed to parse JSON: {e}")
         return {
@@ -594,107 +597,30 @@ Ensure your response is valid JSON matching this schema exactly:
         )
         
         content = completion.choices[0].message.content
-        return json.loads(content)
+        return parse_json_safely(content)
     except Exception as e:
         print(f"[Note] Revenue recommendation API unavailable or failed to parse JSON: {e}")
+        
+        target_segment = "cart_abandoned"
+        try:
+            segments = context.get("segment_counts", {})
+            if segments:
+                target_segment = max(segments, key=segments.get)
+        except:
+            pass
+
         return {
-            "strategy": "Wait for API recovery",
+            "strategy": "Re-engage High Value Segments",
             "recommendation": {
-                "segment": "unknown",
-                "action": "API failure fallback",
-                "offer": "10% Discount",
+                "segment": target_segment,
+                "action": "Targeted Discount",
+                "offer": f"10% off for {target_segment} customers",
                 "discount_percentage": 10
             },
-            "reasoning": "OpenRouter API is currently unavailable.",
-            "priority": "low",
-            "confidence": "low",
-            "evidence": [],
-            "limitations": ["AI processing offline"]
+            "reasoning": f"Focusing on the {target_segment} segment offers a strong opportunity for conversion based on current data. (Deterministic Fallback used due to AI unavailability).",
+            "priority": "high",
+            "confidence": "medium",
+            "evidence": [f"{target_segment} is a key segment for the merchant"],
+            "limitations": ["Fallback strategy used due to AI API unavailability"]
         }
 
-def determine_campaign_strategy(goal: str, merchant_context: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Analyzes the merchant's goal and context to identify the best business opportunity
-    and formulate a high-level campaign strategy.
-    """
-    try:
-        client = get_client()
-
-        def redact_sensitive(obj):
-            if isinstance(obj, dict):
-                return {k: ("***REDACTED***" if any(s in k.lower() for s in ["password", "secret", "key", "uri", "email", "phone", "address", "auth", "token"]) else redact_sensitive(v)) for k, v in obj.items()}
-            elif isinstance(obj, list):
-                return [redact_sensitive(item) for item in obj]
-            return obj
-
-        safe_context = redact_sensitive(merchant_context)
-
-        prompt = f"""
-You are the RAZZZ AI Campaign Strategist.
-The merchant has requested a new campaign with the following goal: "{goal}"
-
-Here is the complete business context (customer segments, sizes, metrics, historical insights, merchant rules):
-{json.dumps(safe_context)}
-
-Your job is to act as a revenue strategist, NOT just an offer generator.
-Analyze the provided goal against the actual data. Detect the most meaningful opportunity (e.g., if the goal is 'increase sales', and you see dormant customers have a very low conversion rate, the opportunity is reactivation).
-
-Formulate a Campaign Strategy (e.g., acquisition, win-back, retention, cart recovery, high-value upsell, margin protection).
-Select the most relevant target segments from the available segments in the data. You can select one, multiple, or none if irrelevant. Do not just automatically select 'loyal', 'new_visitor', and 'dormant' unless justified.
-
-You MUST enforce merchant rules (max discount, min margin) in your recommendations.
-You MUST base your reasoning ONLY on the provided data. Do not invent metrics or claim historical causation without evidence.
-
-Respond ONLY with a valid JSON object matching this exact schema:
-{{
-  "business_goal": "The merchant's stated goal",
-  "opportunity": {{
-    "title": "Short title of the opportunity",
-    "description": "Explanation of the opportunity based on data",
-    "evidence": ["Data point 1", "Data point 2"]
-  }},
-  "strategy": {{
-    "type": "Strategy type (e.g., win-back, retention)",
-    "name": "Human readable strategy name",
-    "description": "How this strategy works"
-  }},
-  "target_segments": ["segment_name1", "segment_name2"],
-  "recommended_action": "High level action to take",
-  "confidence": "high|medium|low",
-  "evidence": ["Why this strategy will work"],
-  "limitations": ["Any risks or data limitations"]
-}}
-"""
-
-        completion = client.chat.completions.create(
-            model="openrouter/free",
-            max_tokens=1500,
-            messages=[
-                {"role": "system", "content": "You are a campaign strategy agent. Reply strictly in JSON matching the requested schema. No markdown wrapping."},
-                {"role": "user", "content": prompt}
-            ]
-        )
-        
-        content = completion.choices[0].message.content
-        return json.loads(content)
-    except Exception as e:
-        print(f"[Note] Strategy API unavailable or failed to parse JSON: {e}")
-        # Safe fallback
-        return {
-            "business_goal": goal,
-            "opportunity": {
-                "title": "Fallback Strategy",
-                "description": "API unavailable, using default opportunity.",
-                "evidence": []
-            },
-            "strategy": {
-                "type": "general",
-                "name": "Standard Engagement",
-                "description": "Standard engagement campaign."
-            },
-            "target_segments": ["loyal", "new_visitor", "dormant"],
-            "recommended_action": "Proceed with default offers.",
-            "confidence": "low",
-            "evidence": [],
-            "limitations": ["AI Strategy generation offline"]
-        }

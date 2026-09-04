@@ -9,17 +9,17 @@ from historical_analyzer import get_historical_learning_insights
 from typing import Optional
 
 class AIRecommendationSchema(BaseModel):
-    # Legacy fields
-    recommended_offer_type: Optional[str] = None
-    recommended_discount_percentage: Optional[float] = None
-    reason: Optional[str] = None
-    confidence: Optional[float] = None
-    
-    # New required fields
-    segment: Optional[str] = None
+    campaign_goal: Optional[str] = None
+    target_segment: Optional[str] = None
+    why_this_segment: Optional[str] = None
+    recommended_strategy: Optional[str] = None
     offer: Optional[str] = None
-    discount_pct: Optional[float] = None
-    priority: Optional[str] = None
+    why_this_offer: Optional[str] = None
+    discount_if_applicable: Optional[float] = None
+    duration: Optional[str] = None
+    ai_reasoning: Optional[str] = None
+    merchant_constraints: Optional[str] = None
+    expected_objective: Optional[str] = None
 
 def run_offer_decision_engine(
     merchant_id: str,
@@ -79,7 +79,9 @@ def run_offer_decision_engine(
     
     # Map the new schema to the old format expected by guardrails and callers if we fallback
     offer_for_guardrails = ai_offer.copy()
-    if "recommended_discount_percentage" in offer_for_guardrails and offer_for_guardrails.get("discount_pct") is None:
+    if "discount_if_applicable" in offer_for_guardrails and offer_for_guardrails.get("discount_pct") is None:
+        offer_for_guardrails["discount_pct"] = offer_for_guardrails["discount_if_applicable"]
+    elif "recommended_discount_percentage" in offer_for_guardrails and offer_for_guardrails.get("discount_pct") is None:
         offer_for_guardrails["discount_pct"] = offer_for_guardrails["recommended_discount_percentage"]
     
     # Create mock customer for guardrails (expects purchase_count)
@@ -90,25 +92,31 @@ def run_offer_decision_engine(
     
     if not is_valid:
         print(f"[Decision Engine] Guardrails blocked AI offer. Falling back to deterministic safe offer.")
-        ai_offer = claude_agent.get_offer_for_segment(segment, merchant_rules, use_deterministic=True)
+        ai_offer = claude_agent.get_offer_for_segment(segment, merchant_rules, use_deterministic=True, campaign_context=campaign_context)
         offer_for_guardrails = ai_offer.copy()
-        if "recommended_discount_percentage" in offer_for_guardrails and offer_for_guardrails.get("discount_pct") is None:
-            offer_for_guardrails["discount_pct"] = offer_for_guardrails["recommended_discount_percentage"]
+        if "discount_if_applicable" in offer_for_guardrails and offer_for_guardrails.get("discount_pct") is None:
+            offer_for_guardrails["discount_pct"] = offer_for_guardrails["discount_if_applicable"]
             
         if not validate_offer(offer_for_guardrails, merchant_rules, guardrail_customer):
             raise ValueError("Guardrails blocked even deterministic fallback offer")
             
     # 5. Final Approved Offer
-    # Fallback reasoning logic to handle both old and new schemas gracefully
-    final_offer_details = ai_offer.get("offer", ai_offer.get("reason", ai_offer.get("reasoning", "")))
-    final_discount = ai_offer.get("discount_pct", ai_offer.get("recommended_discount_percentage", 0))
-    final_explanation = ai_offer.get("reason", ai_offer.get("reasoning", ai_offer.get("offer", "")))
+    final_offer_details = ai_offer.get("offer", "")
+    final_discount = ai_offer.get("discount_if_applicable", ai_offer.get("discount_pct", 0))
+    final_explanation = ai_offer.get("ai_reasoning", ai_offer.get("why_this_offer", ""))
     
     return {
         "segment": segment,
         "offer_details": final_offer_details,
         "discount_percentage": float(final_discount if final_discount is not None else 0),
-        "explanation": final_explanation
+        "explanation": final_explanation,
+        "campaign_goal": ai_offer.get("campaign_goal"),
+        "why_this_segment": ai_offer.get("why_this_segment"),
+        "recommended_strategy": ai_offer.get("recommended_strategy"),
+        "why_this_offer": ai_offer.get("why_this_offer"),
+        "duration": ai_offer.get("duration"),
+        "merchant_constraints": ai_offer.get("merchant_constraints"),
+        "expected_objective": ai_offer.get("expected_objective")
     }
 
 def recommend_offer_strategy(

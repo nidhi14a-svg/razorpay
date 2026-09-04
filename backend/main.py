@@ -1,9 +1,9 @@
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, File, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, Any, Dict
 from dotenv import load_dotenv
-from database import merchants_collection, offers_collection, orders_collection, campaigns_collection, customers_collection, optimizations_collection
+from database import merchants_collection, offers_collection, orders_collection, campaigns_collection, customers_collection, optimizations_collection, campaign_executions_collection
 from offer_service import generate_personalized_offer
 import uuid
 from datetime import datetime, timezone
@@ -33,6 +33,27 @@ class CustomerProfile(BaseModel):
     cart_status: Optional[str] = None
     average_order_value: Optional[float] = None
 
+import hashlib
+import os
+import binascii
+
+def hash_password(password: str) -> str:
+    salt = hashlib.sha256(os.urandom(60)).hexdigest().encode('ascii')
+    pwdhash = hashlib.pbkdf2_hmac('sha512', password.encode('utf-8'), salt, 100000)
+    pwdhash = binascii.hexlify(pwdhash)
+    return (salt + pwdhash).decode('ascii')
+
+def verify_password(stored_password: str, provided_password: str) -> bool:
+    if stored_password == provided_password:
+        return True
+    if len(stored_password) >= 64:
+        salt = stored_password[:64].encode('ascii')
+        stored_pwdhash = stored_password[64:]
+        pwdhash = hashlib.pbkdf2_hmac('sha512', provided_password.encode('utf-8'), salt, 100000)
+        pwdhash = binascii.hexlify(pwdhash).decode('ascii')
+        return pwdhash == stored_pwdhash
+    return False
+
 @app.get("/health")
 def health():
     """Test endpoint - if works, backend is running"""
@@ -42,17 +63,20 @@ def health():
 def login(request: LoginRequest):
     """Authenticate merchant with email and password"""
     try:
-        # Find merchant by email
         merchant = merchants_collection.find_one({"email": request.email})
-        
         if not merchant:
             raise HTTPException(status_code=401, detail="Invalid email or password")
         
-        # Validate password
-        if merchant.get("password") != request.password:
+        if not verify_password(merchant.get("password"), request.password):
             raise HTTPException(status_code=401, detail="Invalid email or password")
+            
+        if not merchant.get("email_verified", True):
+            return {
+                "requires_verification": True,
+                "email": merchant.get("email"),
+                "detail": "Email address must be verified before logging in."
+            }
         
-        # Return merchant data (excluding password for security)
         return {
             "merchant_id": merchant.get("merchant_id"),
             "business_name": merchant.get("business_name"),
@@ -62,6 +86,149 @@ def login(request: LoginRequest):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail="Internal Server Error")
+
+class RegisterRequest(BaseModel):
+    full_name: str
+    business_name: str
+    email: str
+    password: str
+
+@app.post("/auth/register")
+def register(request: RegisterRequest):
+    try:
+        existing = merchants_collection.find_one({"email": request.email})
+        if existing:
+            raise HTTPException(status_code=400, detail="Email already registered")
+            
+        merchant_id = f"merch_{uuid.uuid4().hex[:12]}"
+        verification_token = str(uuid.uuid4())
+        
+        merchant_doc = {
+            "merchant_id": merchant_id,
+            "full_name": request.full_name,
+            "business_name": request.business_name,
+            "email": request.email,
+            "password": hash_password(request.password),
+            "email_verified": False,
+            "verification_token": verification_token,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "rules": {
+                "max_discount_percentage": 25.0,
+                "min_margin_percentage": 30.0
+            }
+        }
+        
+        merchants_collection.insert_one(merchant_doc)
+        
+        print("\n" + "="*50)
+        print("DEV MODE: Verification Email Simulation")
+        print(f"To: {request.email}")
+        print(f"Link: http://localhost:3000/verify-email?token={verification_token}")
+        print("="*50 + "\n")
+        
+        return {"status": "success", "message": "Registration successful. Please check your email to verify your account."}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="Registration failed")
+
+class TokenRequest(BaseModel):
+    token: str
+
+@app.post("/auth/verify-email")
+def verify_email(request: TokenRequest):
+    try:
+        merchant = merchants_collection.find_one({"verification_token": request.token})
+        if not merchant:
+            raise HTTPException(status_code=400, detail="Invalid or expired verification token")
+            
+        merchants_collection.update_one(
+            {"_id": merchant["_id"]},
+            {"$set": {"email_verified": True}, "$unset": {"verification_token": ""}}
+        )
+        return {"status": "success", "message": "Email verified successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="Verification failed")
+
+class ResendVerificationRequest(BaseModel):
+    email: str
+
+@app.post("/auth/resend-verification")
+def resend_verification(request: ResendVerificationRequest):
+    try:
+        merchant = merchants_collection.find_one({"email": request.email})
+        if not merchant:
+            return {"status": "success", "message": "If an account exists, a verification email was sent."}
+            
+        if merchant.get("email_verified"):
+            return {"status": "success", "message": "Account is already verified."}
+            
+        verification_token = str(uuid.uuid4())
+        merchants_collection.update_one(
+            {"_id": merchant["_id"]},
+            {"$set": {"verification_token": verification_token}}
+        )
+        
+        print("\n" + "="*50)
+        print("DEV MODE: Resend Verification Email Simulation")
+        print(f"To: {request.email}")
+        print(f"Link: http://localhost:3000/verify-email?token={verification_token}")
+        print("="*50 + "\n")
+        
+        return {"status": "success", "message": "If an account exists, a verification email was sent."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="Failed to resend verification")
+
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+@app.post("/auth/forgot-password")
+def forgot_password(request: ForgotPasswordRequest):
+    try:
+        merchant = merchants_collection.find_one({"email": request.email})
+        if not merchant:
+            # Generic response to prevent email enumeration
+            return {"status": "success", "message": "If an account exists with that email, a password reset link has been sent."}
+            
+        reset_token = str(uuid.uuid4())
+        merchants_collection.update_one(
+            {"_id": merchant["_id"]},
+            {"$set": {"reset_token": reset_token}}
+        )
+        
+        print("\n" + "="*50)
+        print("DEV MODE: Password Reset Email Simulation")
+        print(f"To: {request.email}")
+        print(f"Link: http://localhost:3000/reset-password?token={reset_token}")
+        print("="*50 + "\n")
+        
+        return {"status": "success", "message": "If an account exists with that email, a password reset link has been sent."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="Failed to process request")
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str
+
+@app.post("/auth/reset-password")
+def reset_password(request: ResetPasswordRequest):
+    try:
+        merchant = merchants_collection.find_one({"reset_token": request.token})
+        if not merchant:
+            raise HTTPException(status_code=400, detail="Invalid or expired reset token")
+            
+        merchants_collection.update_one(
+            {"_id": merchant["_id"]},
+            {"$set": {"password": hash_password(request.new_password)}, "$unset": {"reset_token": ""}}
+        )
+        
+        return {"status": "success", "message": "Password has been reset successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="Failed to reset password")
 
 class OfferRecommendationRequest(BaseModel):
     merchant_id: str
@@ -284,144 +451,106 @@ def create_campaign(request: CampaignCreateRequest):
         
         # Fetch target customers
         all_customers = list(customers_collection.find({"merchant_id": request.merchant_id}))
-        target_customers = []
         
-        from decision_engine import run_offer_decision_engine
-        from segmentation import segment_customer
+        from claude_agent import generate_campaign_intelligence
+        from guardrails import validate_offer
         from historical_analyzer import get_historical_learning_insights
-        from merchant_intelligence import get_merchant_campaign_intelligence
-        from claude_agent import determine_campaign_strategy
         
-        # We process customers to determine segments and stats
-        all_segments_data = {}
-        for cust in all_customers:
-            cust_dict = {
-                "id": str(cust.get("_id", cust.get("id"))),
-                "purchase_count": cust.get("purchase_count", 0),
-                "days_since_last_purchase": cust.get("days_since_last_purchase", 999),
-                "lifetime_value": cust.get("lifetime_value", 0),
-                "cart_status": cust.get("cart_status", "browsing"),
-                "average_order_value": cust.get("average_order_value", 0)
-            }
-            segment = segment_customer(cust_dict)
-            if segment not in all_segments_data:
-                all_segments_data[segment] = {"customers": [], "stats": {}}
-            all_segments_data[segment]["customers"].append(cust_dict)
-            
-        # Aggregate stats per segment for AI context
-        for segment, data in all_segments_data.items():
-            customers = data["customers"]
-            data["stats"] = {
-                "segment_name": segment,
-                "customer_count": len(customers),
-                "average_lifetime_value": sum(c.get("lifetime_value", 0) for c in customers) / len(customers) if customers else 0,
-                "average_purchase_count": sum(c.get("purchase_count", 0) for c in customers) / len(customers) if customers else 0,
-                "cart_abandoned_count": sum(1 for c in customers if c.get("cart_status") == "abandoned")
-            }
-            
-        # Strategy Generation
         historical_learning = get_historical_learning_insights(request.merchant_id)
-        intelligence = get_merchant_campaign_intelligence(request.merchant_id)
         
-        strategy_context = {
-            "merchant_rules": merchant_rules,
-            "segment_stats": {k: v["stats"] for k, v in all_segments_data.items()},
-            "historical_learning": historical_learning,
-            "campaign_intelligence": intelligence
-        }
-        
-        strategy_decision = determine_campaign_strategy(
+        # Call the unified data-driven AI intelligence
+        intelligence = generate_campaign_intelligence(
             goal=request.campaign_description or request.campaign_name,
-            merchant_context=strategy_context
+            customers=all_customers,
+            merchant_rules=merchant_rules,
+            historical_context=historical_learning
         )
         
-        ai_target_segments = strategy_decision.get("target_segments", [])
+        # Defensive type checking for AI intelligence output
+        if not isinstance(intelligence, dict):
+            intelligence = {"segments": []}
+            
+        segments_data = intelligence.get("segments", [])
+        if not isinstance(segments_data, list):
+            segments_data = []
         
-        # Filter segments to target
-        segments_data = {}
-        if request.target_segment.lower() in ["all", "auto"]:
-            # Use AI selected segments
-            for seg in ai_target_segments:
-                if seg in all_segments_data:
-                    segments_data[seg] = all_segments_data[seg]
-            # Fallback if AI selected nothing but we need something
-            if not segments_data and all_segments_data:
-                # Safest fallback is existing segments
-                segments_data = all_segments_data
-        else:
-            # Respect explicit manual selection
-            explicit_seg = request.target_segment.lower()
-            if explicit_seg in all_segments_data:
-                segments_data[explicit_seg] = all_segments_data[explicit_seg]
-        for segment, data in segments_data.items():
-            customers = data["customers"]
-            data["stats"] = {
-                "segment_name": segment,
-                "customer_count": len(customers),
-                "average_lifetime_value": sum(c.get("lifetime_value", 0) for c in customers) / len(customers) if customers else 0,
-                "average_purchase_count": sum(c.get("purchase_count", 0) for c in customers) / len(customers) if customers else 0,
-                "cart_abandoned_count": sum(1 for c in customers if c.get("cart_status") == "abandoned")
-            }
-                
         offers_generated = 0
-        failed_generations = 0
         generated_offers = {}
+        eligible_customers_count = 0
         
-        # Generate exactly ONE offer per segment, then apply to all customers in segment
-        for segment, data in segments_data.items():
-            try:
-                # Step 5 & 6: AI Offer Decision Engine
-                campaign_context = {
-                    "name": request.campaign_name,
-                    "description": request.campaign_description,
-                    "target": request.target_segment,
-                    "strategy": strategy_decision
-                }
-                decision = run_offer_decision_engine(
-                    merchant_id=request.merchant_id,
-                    segment=segment,
-                    segment_stats=data["stats"],
-                    merchant_rules=merchant_rules,
-                    campaign_context=campaign_context
+        # Process each dynamically generated segment
+        for segment_info in segments_data:
+            segment_name = segment_info.get("segment", "Unknown Segment")
+            customer_ids = segment_info.get("customer_ids", [])
+            
+            if not customer_ids:
+                continue
+                
+            # Validate the offer against merchant rules
+            # We construct a mock customer with purchase_count=0 to pass the now-removed loyal check safely,
+            # though validate_offer mainly checks max_discount and min_margin.
+            is_valid = validate_offer(segment_info, merchant_rules, {"purchase_count": 0})
+            
+            if not is_valid:
+                print(f"❌ Guardrails blocked AI offer for {segment_name}. Clamping discount.")
+                segment_info["discount_pct"] = min(
+                    segment_info.get("discount_pct", 0), 
+                    merchant_rules.get("max_discount_percentage", 20)
                 )
+                segment_info["merchant_constraints"].append("Forced discount clamp due to rules violation")
                 
-                # Keep one sample offer per segment for the UI response and final campaign document
-                generated_offers[segment] = {
-                    "discount_pct": decision["discount_percentage"],
-                    "offer": decision["offer_details"],
-                    "reasoning": decision["explanation"]
+            generated_offers[segment_name] = {
+                "discount_pct": segment_info.get("discount_pct", 0),
+                "offer": segment_info.get("offer", ""),
+                "reasoning": segment_info.get("reasoning", "")
+            }
+            
+            # Map the customer_ids back to the real customer data
+            matched_customers = [c for c in all_customers if c.get("id") in customer_ids or str(c.get("_id")) in customer_ids]
+            eligible_customers_count += len(matched_customers)
+            
+            for cust in matched_customers:
+                offer_doc = {
+                    "offer_id": str(uuid.uuid4()),
+                    "campaign_id": campaign_id,
+                    "merchant_id": request.merchant_id,
+                    "customer_id": str(cust.get("_id", cust.get("id"))),
+                    "customer_name": cust.get("name", "Unknown"),
+                    "customer_email": cust.get("email", ""),
+                    "customer_segment": segment_name,
+                    "offer_description": segment_info.get("offer", ""),
+                    "discount_percentage": segment_info.get("discount_pct", 0),
+                    "explanation": segment_info.get("reasoning", ""),
+                    
+                    # Expanded AI fields
+                    "campaign_goal": request.campaign_description or request.campaign_name,
+                    "why_this_segment": segment_info.get("segment_description", ""),
+                    "recommended_strategy": segment_info.get("strategy", ""),
+                    "why_this_offer": segment_info.get("reasoning", ""),
+                    "duration": f"{segment_info.get('duration_days', 7)} days",
+                    "merchant_constraints": ", ".join(segment_info.get("merchant_constraints", [])),
+                    "expected_objective": segment_info.get("expected_objective", ""),
+                    "confidence": segment_info.get("confidence", "medium"),
+                    "data_evidence": ", ".join(segment_info.get("data_evidence", [])),
+                    
+                    "status": "GENERATED",
+                    "created_at": datetime.now(timezone.utc).isoformat()
                 }
                 
-                # Persist Offer linked to Campaign for EVERY customer in this segment
-                for cust_dict in data["customers"]:
-                    offer_doc = {
-                        "offer_id": str(uuid.uuid4()),
-                        "campaign_id": campaign_id,
-                        "merchant_id": request.merchant_id,
-                        "customer_id": cust_dict["id"],
-                        "customer_segment": segment,
-                        "offer_description": decision["offer_details"],
-                        "discount_percentage": decision["discount_percentage"],
-                        "explanation": decision["explanation"],
-                        "status": "OFFER_CREATED",
-                        "created_at": datetime.now(timezone.utc).isoformat()
-                    }
-                    offers_collection.insert_one(offer_doc)
-                    offers_generated += 1
-                
-            except Exception as e:
-                import traceback
-                traceback.print_exc()
-                print(f"Failed to generate offer for segment {segment}: {e}")
-                failed_generations += 1
+                offers_collection.insert_one(offer_doc)
+                offers_generated += 1
                 
         # Finalize Campaign
         final_status = "ACTIVE" if offers_generated > 0 else "FAILED"
+        customers_analyzed = len(all_customers)
+        
         campaigns_collection.update_one(
             {"campaign_id": campaign_id},
             {"$set": {
                 "status": final_status,
                 "target_segments": list(generated_offers.keys()),
+                "customers_analyzed": customers_analyzed,
+                "eligible_customers": eligible_customers_count,
                 "updated_at": datetime.now(timezone.utc).isoformat()
             }}
         )
@@ -435,14 +564,137 @@ def create_campaign(request: CampaignCreateRequest):
             "offers_generated": offers_generated,
             "created_at": campaign_doc["created_at"],
             "offers": generated_offers,
-            "strategy": strategy_decision
+            "strategy": {"opportunity": {"title": "Dynamic AI Strategy", "description": "Strategy generated natively from customer data analysis."}}
         }
-        
+
     except HTTPException:
         raise
     except Exception as e:
         print(f"Error creating campaign: {e}")
         raise HTTPException(status_code=500, detail="Internal Server Error")
+
+class ExecuteCampaignRequest(BaseModel):
+    merchant_id: str
+
+class ExecuteCampaignResponse(BaseModel):
+    execution_id: str
+    campaign_id: str
+    status: str
+    total_offers_sent: int
+    executed_at: str
+
+@app.post("/campaigns/{campaign_id}/execute", response_model=ExecuteCampaignResponse)
+def execute_campaign(campaign_id: str, request: ExecuteCampaignRequest):
+    """Executes a campaign, generating unique coupon codes and marking offers as SENT."""
+    try:
+        # Check if already executed
+        existing_execution = campaign_executions_collection.find_one({
+            "campaign_id": campaign_id,
+            "merchant_id": request.merchant_id
+        })
+        
+        if existing_execution:
+            raise HTTPException(status_code=400, detail="Campaign has already been executed")
+            
+        campaign = campaigns_collection.find_one({"campaign_id": campaign_id, "merchant_id": request.merchant_id})
+        if not campaign:
+            raise HTTPException(status_code=404, detail="Campaign not found")
+            
+        # Get all offers for this campaign
+        offers = list(offers_collection.find({"campaign_id": campaign_id, "merchant_id": request.merchant_id}))
+        
+        if not offers:
+            raise HTTPException(status_code=400, detail="No offers found for this campaign to execute")
+            
+        total_sent = 0
+        execution_id = str(uuid.uuid4())
+        
+        for offer in offers:
+            coupon_code = f"OFFER-{uuid.uuid4().hex[:8].upper()}"
+            
+            offers_collection.update_one(
+                {"_id": offer["_id"]},
+                {
+                    "$set": {
+                        "status": "SENT",
+                        "coupon_code": coupon_code,
+                        "sent_at": datetime.now(timezone.utc).isoformat()
+                    }
+                }
+            )
+            total_sent += 1
+            
+        # --- DEMO SIMULATION LOGIC ---
+        import random
+        import hashlib
+        
+        # Use a deterministic seed based on the campaign_id so the demo results are stable
+        # Using md5 to get an integer seed
+        seed_val = int(hashlib.md5(campaign_id.encode('utf-8')).hexdigest(), 16)
+        random.seed(seed_val)
+        
+        for offer in offers:
+            # Deterministically convert ~15% of offers
+            if random.random() < 0.15:
+                orders_collection.insert_one({
+                    "order_id": str(uuid.uuid4()),
+                    "offer_id": offer["offer_id"],
+                    "customer_id": offer.get("customer_id"),
+                    "merchant_id": request.merchant_id,
+                    "campaign_id": campaign_id,
+                    "payment_status": "PAYMENT_VERIFIED",
+                    # Generate realistic revenue in paise (e.g. 1500 to 5000 INR)
+                    "amount": random.randint(1500, 5000) * 100, 
+                    "razorpay_order_id": f"order_{uuid.uuid4().hex[:14]}",
+                    "razorpay_payment_id": f"pay_{uuid.uuid4().hex[:14]}",
+                    "created_at": datetime.now(timezone.utc).isoformat()
+                })
+        # -----------------------------
+
+        # Create execution record
+        execution_doc = {
+            "execution_id": execution_id,
+            "campaign_id": campaign_id,
+            "merchant_id": request.merchant_id,
+            "total_offers_sent": total_sent,
+            "status": "COMPLETED",
+            "executed_at": datetime.now(timezone.utc).isoformat()
+        }
+        campaign_executions_collection.insert_one(execution_doc)
+        
+        # Update campaign status
+        campaigns_collection.update_one(
+            {"campaign_id": campaign_id},
+            {"$set": {"status": "EXECUTED"}}
+        )
+        
+        return {
+            "execution_id": execution_id,
+            "campaign_id": campaign_id,
+            "status": "COMPLETED",
+            "total_offers_sent": total_sent,
+            "executed_at": execution_doc["executed_at"]
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error executing campaign: {e}")
+        raise HTTPException(status_code=500, detail="Internal Server Error")
+
+@app.get("/campaigns/{campaign_id}/execution")
+def get_campaign_execution(campaign_id: str, merchant_id: str = Query(...)):
+    """Gets the execution status and stats of a campaign."""
+    execution = campaign_executions_collection.find_one(
+        {"campaign_id": campaign_id, "merchant_id": merchant_id},
+        {"_id": 0}
+    )
+    
+    if not execution:
+        return {"executed": False}
+        
+    execution["executed"] = True
+    return execution
 
 @app.get("/campaigns/{campaign_id}")
 def get_campaign(campaign_id: str, merchant_id: str = Query(...)):
@@ -766,12 +1018,10 @@ def get_customers(
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100)
 ):
-    # Enforce merchant isolation: only return customers who have interacted with this merchant
-    customer_ids = offers_collection.distinct("customer_id", {"merchant_id": merchant_id})
-    
-    query = {"id": {"$in": customer_ids}}
+    query = {"merchant_id": merchant_id}
     cursor = customers_collection.find(query, {"_id": 0}).skip((page - 1) * limit).limit(limit)
     customers = list(cursor)
+    total_count = customers_collection.count_documents(query)
     
     from segmentation import segment_customer
     filtered_customers = []
@@ -785,8 +1035,82 @@ def get_customers(
         "items": filtered_customers,
         "page": page,
         "limit": limit,
-        "total": len(customer_ids)
+        "total": total_count
     }
+
+import csv
+import io
+
+@app.post("/customers/upload")
+async def upload_customers(
+    merchant_id: str = Form(...),
+    file: UploadFile = File(...)
+):
+    """Parses a CSV of customers and inserts them into DB"""
+    if not file.filename.endswith('.csv'):
+        raise HTTPException(status_code=400, detail="Only CSV files are allowed")
+        
+    try:
+        contents = await file.read()
+        decoded = contents.decode('utf-8')
+        reader = csv.DictReader(io.StringIO(decoded))
+        
+        customers_to_insert = []
+        for row in reader:
+            # Generate a new ID if missing
+            cust_id = row.get("id") or row.get("customer_id") or str(uuid.uuid4())
+            
+            # Create standard schema
+            customer = {
+                "id": cust_id,
+                "merchant_id": merchant_id,
+                "name": row.get("name", "Unknown Customer"),
+                "email": row.get("email", ""),
+                "purchase_count": int(row.get("purchase_count", 0)),
+                "days_since_last_purchase": int(row.get("days_since_last_purchase", 0)),
+                "lifetime_value": float(row.get("lifetime_value", 0.0)),
+                "cart_status": row.get("cart_status", ""),
+                "average_order_value": float(row.get("average_order_value", 0.0))
+            }
+            customers_to_insert.append(customer)
+            
+        if customers_to_insert:
+            # Delete old customers for this merchant to simulate a clean state for testing
+            customers_collection.delete_many({"merchant_id": merchant_id})
+            customers_collection.insert_many(customers_to_insert)
+            
+        return {"status": "success", "imported": len(customers_to_insert)}
+        
+    except Exception as e:
+        print(f"Error parsing CSV: {e}")
+        raise HTTPException(status_code=400, detail=f"Invalid CSV format: {str(e)}")
+
+@app.post("/customers/demo")
+def setup_demo_customers():
+    """Seeds the DB with demo data (merchant and customers)"""
+    try:
+        from demo import setup_demo_data
+        result = setup_demo_data()
+        return {
+            "status": "success",
+            "message": "Demo data loaded successfully",
+            "customers_count": result.get("customers_count", 0),
+            "segments_count": result.get("segments_count", 0)
+        }
+    except Exception as e:
+        print(f"Error setting up demo data: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to load demo data: {str(e)}")
+
+@app.post("/customers/demo/reset")
+def reset_demo_customers():
+    """Clears demo data from the DB"""
+    try:
+        from demo import clear_demo_data
+        clear_demo_data()
+        return {"status": "success", "message": "Demo data reset successfully"}
+    except Exception as e:
+        print(f"Error resetting demo data: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to reset demo data: {str(e)}")
 
 @app.get("/customers/{customer_id}")
 def get_customer(customer_id: str, merchant_id: str = Query(...)):

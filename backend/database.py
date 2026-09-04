@@ -39,7 +39,7 @@ optimizations_collection = db["optimizations"]
 optimization_executions_collection = db["optimization_executions"]
 feedback_collection = db["feedback"]
 agent_runs_collection = db["agent_runs"]
-
+campaign_executions_collection = db["campaign_executions"]
 def init_indexes():
     """Create useful indexes on collections to optimize queries."""
     try:
@@ -72,6 +72,10 @@ def init_indexes():
         
         agent_runs_collection.create_index("agent_run_id", unique=True)
         agent_runs_collection.create_index("merchant_id")
+        
+        campaign_executions_collection.create_index("execution_id", unique=True)
+        campaign_executions_collection.create_index("campaign_id")
+        campaign_executions_collection.create_index("merchant_id")
         
         print("✓ Database indexes initialized successfully")
     except Exception as e:

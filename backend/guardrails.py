@@ -44,10 +44,7 @@ def validate_offer(offer: dict, merchant_rules: dict, customer: dict) -> bool:
         print(f"❌ BLOCKED: Discount {discount_pct}% exceeds maximum allowed {max_discount_percentage}%")
         return False
 
-    # RULE 2: Protect loyal customers
-    if purchase_count >= 3 and discount_pct > 5:
-        print(f"❌ BLOCKED: Loyal customer should not receive {discount_pct}% discount")
-        return False
+    # Removed hardcoded RULE 2: Protect loyal customers to allow dynamic AI reasoning for win-back strategies
 
     # RULE 3: Minimum margin
     average_selling_price = 5000.0
