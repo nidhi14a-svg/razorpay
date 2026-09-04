@@ -3,48 +3,54 @@ import { StatusBadge } from './StatusBadge'
 
 export function AIInsightCard({ title, recommendation, reason, evidence, confidence, limitations }) {
   const confidenceColor = {
-    high: "bg-green-100 text-green-800",
-    medium: "bg-amber-100 text-amber-800",
-    low: "bg-red-100 text-red-800"
+    high: "bg-emerald-50 text-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-400 border-emerald-200/50 dark:border-emerald-800/30",
+    medium: "bg-amber-50 text-amber-700 dark:bg-amber-900/20 dark:text-amber-400 border-amber-200/50 dark:border-amber-800/30",
+    low: "bg-red-50 text-red-700 dark:bg-red-900/20 dark:text-red-400 border-red-200/50 dark:border-red-800/30"
   }
 
   const safeConfidence = (confidence || "low").toLowerCase()
 
   return (
-    <div className="bg-gradient-to-r from-purple-50 to-blue-50 border border-purple-100 rounded-xl p-6 shadow-sm relative overflow-hidden">
-      {/* Decorative background element */}
-      <div className="absolute -top-10 -right-10 w-40 h-40 bg-purple-200/40 rounded-full blur-3xl"></div>
+    <div className="bg-surface rounded-2xl p-7 shadow-soft border border-border relative overflow-hidden group hover:border-brand-primary/40 transition-colors duration-300">
+      {/* Decorative top border */}
+      <div className="absolute top-0 left-0 w-full h-1.5 bg-gradient-to-r from-brand-primary via-brand-teal to-brand-mint opacity-80"></div>
       
-      <div className="flex items-center gap-2 mb-4 relative z-10">
-        <div className="p-2 bg-purple-100 rounded-lg text-purple-600">
-          <Sparkles size={20} />
+      {/* Decorative background element */}
+      <div className="absolute -top-24 -right-24 w-64 h-64 bg-brand-primary/5 rounded-full blur-3xl pointer-events-none group-hover:bg-brand-primary/10 transition-colors duration-500"></div>
+      
+      <div className="flex items-center gap-4 mb-8 relative z-10">
+        <div className="p-3 bg-brand-primary/10 text-brand-primary dark:bg-brand-primary/20 dark:text-brand-teal rounded-xl shadow-sm border border-brand-primary/20">
+          <Sparkles size={22} className="animate-pulse-slow" />
         </div>
-        <h3 className="text-xl font-bold text-gray-900">{title || "AI Insight"}</h3>
-        <span className={`ml-auto text-xs font-medium px-2.5 py-1 rounded-full ${confidenceColor[safeConfidence]}`}>
-          {safeConfidence.toUpperCase()} CONFIDENCE
+        <div>
+          <h4 className="text-xs font-bold text-brand-primary uppercase tracking-wider mb-0.5">AI Revenue Agent</h4>
+          <h3 className="text-xl font-bold text-foreground tracking-tight">{title || "Strategic Insight"}</h3>
+        </div>
+        <span className={`ml-auto text-[10px] font-bold px-3 py-1.5 rounded-full border tracking-wide uppercase ${confidenceColor[safeConfidence]}`}>
+          {safeConfidence} CONFIDENCE
         </span>
       </div>
 
-      <div className="bg-white/80 backdrop-blur-sm rounded-lg p-5 border border-white/40 mb-4 relative z-10">
-        <h4 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-2">Recommendation</h4>
-        <p className="text-lg font-medium text-gray-900">{recommendation}</p>
+      <div className="bg-background/50 dark:bg-black/20 rounded-xl p-6 border border-border/60 mb-6 relative z-10">
+        <h4 className="text-[11px] font-semibold text-muted uppercase tracking-wider mb-3">Current Recommendation</h4>
+        <p className="text-xl font-medium text-foreground leading-snug mb-5">{recommendation}</p>
         
         {reason && (
-          <div className="mt-4">
-            <h4 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-1">Reasoning</h4>
-            <p className="text-sm text-gray-700">{reason}</p>
+          <div className="mt-5 pt-5 border-t border-border/50">
+            <h4 className="text-[11px] font-semibold text-muted uppercase tracking-wider mb-2">Strategy & Reasoning</h4>
+            <p className="text-sm text-foreground/80 leading-relaxed">{reason}</p>
           </div>
         )}
       </div>
 
       {evidence && evidence.length > 0 && (
-        <div className="mb-4 relative z-10">
-          <h4 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-2">Supporting Evidence</h4>
-          <ul className="space-y-2">
+        <div className="mb-6 relative z-10">
+          <h4 className="text-[11px] font-semibold text-muted uppercase tracking-wider mb-3 pl-1">Data Evidence</h4>
+          <ul className="space-y-3 bg-surface p-5 rounded-xl border border-border/40 shadow-sm">
             {evidence.map((item, idx) => (
-              <li key={idx} className="flex items-start gap-2 text-sm text-gray-700">
-                <span className="text-purple-500 mt-0.5">•</span>
-                {item}
+              <li key={idx} className="flex items-start gap-3 text-sm text-foreground/80">
+                <div className="mt-1 w-1.5 h-1.5 rounded-full bg-brand-primary flex-shrink-0"></div>
+                <span className="leading-relaxed">{item}</span>
               </li>
             ))}
           </ul>
@@ -52,17 +58,18 @@ export function AIInsightCard({ title, recommendation, reason, evidence, confide
       )}
 
       {limitations && limitations.length > 0 && (
-        <div className="bg-amber-50/80 rounded-lg p-4 border border-amber-100 mt-4 relative z-10">
-          <div className="flex items-center gap-2 text-amber-800 font-medium text-sm mb-2">
-            <AlertTriangle size={16} /> Limitations
+        <div className="bg-amber-50/50 dark:bg-amber-900/10 rounded-xl p-4 border border-amber-100 dark:border-amber-900/30 relative z-10 flex gap-3">
+          <AlertTriangle size={18} className="text-amber-600 dark:text-amber-500 flex-shrink-0 mt-0.5" /> 
+          <div>
+            <h4 className="text-xs font-bold text-amber-800 dark:text-amber-500 uppercase tracking-wider mb-2">Constraints</h4>
+            <ul className="space-y-1.5">
+              {limitations.map((item, idx) => (
+                <li key={idx} className="text-sm text-amber-700/90 dark:text-amber-400/90 flex items-start gap-2">
+                  <span className="mt-0.5 opacity-50 text-[10px]">■</span> {item}
+                </li>
+              ))}
+            </ul>
           </div>
-          <ul className="space-y-1">
-            {limitations.map((item, idx) => (
-              <li key={idx} className="text-xs text-amber-700 flex items-start gap-2">
-                <span className="mt-0.5">-</span> {item}
-              </li>
-            ))}
-          </ul>
         </div>
       )}
     </div>

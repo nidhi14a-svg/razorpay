@@ -7,7 +7,6 @@ import { LoadingSkeleton } from '@/components/LoadingSkeleton'
 
 export default function OptimizationsPage() {
   const [optimizations, setOptimizations] = useState([])
-  const [campaigns, setCampaigns] = useState([])
   const [loading, setLoading] = useState(true)
   const [actionLoading, setActionLoading] = useState(false)
   const [error, setError] = useState(null)
@@ -15,6 +14,11 @@ export default function OptimizationsPage() {
   const merchantId = typeof window !== 'undefined' ? localStorage.getItem('merchantId') : null
 
   useEffect(() => {
+    if (!merchantId) {
+      window.location.href = '/login'
+      return
+    }
+    
     async function fetchData() {
       try {
         const optRes = await fetch(`http://localhost:8000/optimizations?merchant_id=${merchantId}`)
@@ -23,7 +27,7 @@ export default function OptimizationsPage() {
         }
         
         const allOpts = await optRes.json()
-        setOptimizations(allOpts)
+        setOptimizations(Array.isArray(allOpts) ? allOpts : [])
       } catch (err) {
         console.error("Optimizations fetch error:", err)
         setError(err.message || "Failed to load optimizations")
@@ -74,8 +78,8 @@ export default function OptimizationsPage() {
     return (
       <div className="space-y-6">
         <div>
-          <h2 className="text-2xl font-bold text-gray-900">Campaign Optimizations</h2>
-          <p className="text-gray-500">Loading AI proposals...</p>
+          <h2 className="text-2xl font-bold text-foreground">Campaign Optimizations</h2>
+          <p className="text-muted">Loading AI proposals...</p>
         </div>
         <div className="grid gap-6">
           <LoadingSkeleton type="card" />
@@ -86,33 +90,33 @@ export default function OptimizationsPage() {
   }
 
   return (
-    <div className="space-y-8 animate-in fade-in duration-500">
-      <div>
-        <h2 className="text-2xl font-bold text-gray-900 tracking-tight">Campaign Optimizations</h2>
-        <p className="text-gray-500 mt-1">Review, approve, and execute AI-generated strategies to improve live campaigns.</p>
+    <div className="space-y-8 animate-in fade-in duration-500 max-w-5xl mx-auto">
+      <div className="border-b border-border pb-6 mb-8">
+        <h2 className="text-3xl font-bold text-foreground tracking-tight">Campaign Optimizations</h2>
+        <p className="text-muted mt-2 text-lg">Review, approve, and execute AI-generated strategies to improve your live campaigns.</p>
       </div>
 
       {error && (
-        <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-lg">
+        <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-400 p-4 rounded-xl">
           {error}
         </div>
       )}
 
       {optimizations.length === 0 && !error ? (
         <EmptyState 
-          title="No optimizations available" 
-          description="The AI hasn't generated any optimization proposals yet. Ensure you have active campaigns with sufficient data."
+          title="No pending optimizations"
+          description="The AI Revenue Agent hasn't generated any optimization proposals for your active campaigns yet."
         />
       ) : (
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-          {optimizations.map((opt) => (
+        <div className="grid gap-8">
+          {optimizations.map(opt => (
             <OptimizationCard 
               key={opt.optimization_id} 
               optimization={opt} 
-              loading={actionLoading}
               onApprove={(id) => handleAction(id, 'approve')}
               onReject={(id) => handleAction(id, 'reject')}
               onExecute={(id) => handleAction(id, 'execute')}
+              loading={actionLoading}
             />
           ))}
         </div>

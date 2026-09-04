@@ -16,6 +16,11 @@ export default function CampaignsPage() {
   useEffect(() => {
     const merchantId = localStorage.getItem('merchantId')
     
+    if (!merchantId) {
+      window.location.href = '/login'
+      return
+    }
+    
     async function fetchCampaigns() {
       try {
         const res = await fetch(`http://localhost:8000/campaigns?merchant_id=${merchantId}`)
@@ -23,7 +28,7 @@ export default function CampaignsPage() {
           throw new Error(`Failed to fetch campaigns (Status: ${res.status})`)
         }
         const json = await res.json()
-        setCampaigns(json.items || [])
+        setCampaigns(Array.isArray(json.items) ? json.items : [])
       } catch (err) {
         console.error("Campaigns fetch error:", err)
         setError(err.message || "Failed to load campaigns")
@@ -44,8 +49,8 @@ export default function CampaignsPage() {
     return (
       <div className="space-y-6">
         <div>
-          <h2 className="text-2xl font-bold text-gray-900">Campaigns</h2>
-          <p className="text-gray-500">Loading your campaigns...</p>
+          <h2 className="text-2xl font-bold text-foreground">Campaigns</h2>
+          <p className="text-muted">Loading your campaigns...</p>
         </div>
         <LoadingSkeleton type="table" />
       </div>
@@ -56,19 +61,19 @@ export default function CampaignsPage() {
     <div className="space-y-6 animate-in fade-in duration-500">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
-          <h2 className="text-2xl font-bold text-gray-900 tracking-tight">Campaigns</h2>
-          <p className="text-gray-500 mt-1">Manage and monitor all your marketing campaigns.</p>
+          <h2 className="text-2xl font-bold text-foreground tracking-tight">Campaigns</h2>
+          <p className="text-muted mt-1">Manage and monitor all your marketing campaigns.</p>
         </div>
         <Link 
           href="/campaigns/create" 
-          className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition shadow-sm"
+          className="flex items-center gap-2 bg-brand-primary hover:bg-brand-teal text-white px-5 py-2.5 rounded-xl font-medium transition-colors shadow-sm"
         >
           <PlusCircle size={20} /> Create Campaign
         </Link>
       </div>
 
       {error && (
-        <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-lg">
+        <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-400 p-4 rounded-xl">
           {error}
         </div>
       )}
@@ -78,21 +83,21 @@ export default function CampaignsPage() {
           title="No campaigns yet" 
           description="You haven't launched any campaigns. Create your first AI-optimized campaign to start generating revenue."
           action={
-            <Link href="/campaigns/create" className="bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-lg font-medium transition">
+            <Link href="/campaigns/create" className="bg-brand-primary hover:bg-brand-teal text-white px-6 py-3 rounded-xl font-medium transition-colors inline-block shadow-sm">
               Create Campaign
             </Link>
           }
         />
       ) : (
-        <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
+        <div className="bg-surface border border-border rounded-2xl shadow-sm overflow-hidden">
           {/* Search/Filter Bar */}
-          <div className="p-4 border-b border-gray-200 bg-gray-50/50 flex items-center">
+          <div className="p-5 border-b border-border bg-gray-50/50 dark:bg-gray-900/20 flex items-center">
             <div className="relative max-w-md w-full flex items-center">
-              <Search className="w-5 h-5 text-gray-400 absolute left-3" />
+              <Search className="w-5 h-5 text-muted absolute left-3" />
               <input 
                 type="text"
                 placeholder="Search campaigns by goal or status..."
-                className="w-full pl-10 pr-4 py-2 bg-white border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-shadow"
+                className="w-full pl-10 pr-4 py-2.5 bg-surface border border-border rounded-xl focus:outline-none focus:ring-2 focus:ring-brand-primary/50 transition-shadow text-foreground"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
               />
@@ -102,47 +107,64 @@ export default function CampaignsPage() {
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse">
               <thead>
-                <tr className="bg-gray-50 text-gray-500 text-sm font-medium border-b border-gray-200">
-                  <th className="p-4 font-semibold uppercase tracking-wider">Campaign</th>
-                  <th className="p-4 font-semibold uppercase tracking-wider">Status</th>
-                  <th className="p-4 font-semibold uppercase tracking-wider">Segments Targeted</th>
-                  <th className="p-4 font-semibold uppercase tracking-wider">ID</th>
-                  <th className="p-4"></th>
+                <tr className="bg-gray-50/50 dark:bg-gray-900/20 border-b border-border">
+                  <th className="p-5 font-semibold text-muted text-sm uppercase tracking-wider">Campaign</th>
+                  <th className="p-5 font-semibold text-muted text-sm uppercase tracking-wider">Status</th>
+                  <th className="p-5 font-semibold text-muted text-sm uppercase tracking-wider">Target Segments</th>
+                  <th className="p-5 font-semibold text-muted text-sm uppercase tracking-wider">Created</th>
+                  <th className="p-5 font-semibold text-muted text-sm uppercase tracking-wider text-right">Action</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-100">
+              <tbody className="divide-y divide-border">
                 {filteredCampaigns.map((campaign) => (
-                  <tr key={campaign.campaign_id} className="hover:bg-blue-50/30 transition-colors group">
-                    <td className="p-4">
-                      <div className="font-semibold text-gray-900 mb-1">
-                        {campaign.goal || campaign.campaign_name || "Untitled Campaign"}
+                  <tr key={campaign.campaign_id} className="hover:bg-gray-50/50 dark:hover:bg-gray-800/30 transition-colors group">
+                    <td className="p-5">
+                      <div className="font-semibold text-foreground text-base mb-1">
+                        {campaign.campaign_name || 'Untitled Campaign'}
                       </div>
-                      <div className="flex items-center text-xs text-gray-500">
-                        <Calendar size={14} className="mr-1" /> Created recently
+                      <div className="text-sm text-muted max-w-xs truncate" title={campaign.goal || campaign.campaign_description}>
+                        {campaign.goal || campaign.campaign_description || 'No goal specified'}
                       </div>
                     </td>
-                    <td className="p-4">
+                    <td className="p-5">
                       <StatusBadge status={campaign.status} />
                     </td>
-                    <td className="p-4 text-sm text-gray-600">
-                       {campaign.target_segments?.length || 0} Segments
+                    <td className="p-5">
+                      <div className="flex flex-wrap gap-1.5">
+                        {(campaign.target_segments || []).map((seg, idx) => (
+                          <span key={idx} className="bg-gray-100 dark:bg-gray-800 text-muted px-2.5 py-1 rounded-md text-xs font-medium capitalize">
+                            {seg.replace(/_/g, ' ')}
+                          </span>
+                        ))}
+                        {(!campaign.target_segments || campaign.target_segments.length === 0) && (
+                          <span className="text-muted text-sm italic">All segments</span>
+                        )}
+                      </div>
                     </td>
-                    <td className="p-4 text-xs font-mono text-gray-400">
-                      {campaign.campaign_id.slice(0, 8)}...
+                    <td className="p-5">
+                      <div className="flex items-center gap-2 text-sm text-muted">
+                        <Calendar size={14} className="opacity-70" />
+                        {new Date(campaign.created_at).toLocaleDateString(undefined, { 
+                          month: 'short', 
+                          day: 'numeric',
+                          year: 'numeric'
+                        })}
+                      </div>
                     </td>
-                    <td className="p-4 text-right">
+                    <td className="p-5 text-right">
                       <Link 
                         href={`/campaigns/${campaign.campaign_id}`}
-                        className="inline-flex items-center text-sm font-medium text-blue-600 hover:text-blue-800 transition-colors"
+                        className="inline-flex items-center gap-1 text-sm font-medium text-brand-primary dark:text-brand-teal hover:text-brand-teal dark:hover:text-brand-primary transition-colors group-hover:translate-x-1 duration-200"
                       >
                         View Details <ChevronRight size={16} />
                       </Link>
                     </td>
                   </tr>
                 ))}
+                
                 {filteredCampaigns.length === 0 && (
                   <tr>
-                    <td colSpan="5" className="p-8 text-center text-gray-500">
+                    <td colSpan="5" className="p-10 text-center text-muted">
                       No campaigns match your search.
                     </td>
                   </tr>

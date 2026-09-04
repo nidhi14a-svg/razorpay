@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation'
 import { AIInsightCard } from '@/components/AIInsightCard'
 import { EmptyState } from '@/components/EmptyState'
 import { LoadingSkeleton } from '@/components/LoadingSkeleton'
-import { Sparkles, Activity } from 'lucide-react'
+import { Sparkles, Activity, FileSearch, ShieldCheck, Users, Target, TrendingUp } from 'lucide-react'
 
 export default function IntelligencePage() {
   const [data, setData] = useState(null)
@@ -13,14 +13,21 @@ export default function IntelligencePage() {
   const [error, setError] = useState(null)
   const [hasRun, setHasRun] = useState(false)
 
+  useEffect(() => {
+    const merchantId = localStorage.getItem('merchantId')
+    if (!merchantId) {
+      window.location.href = '/login'
+    }
+  }, [])
+
   const handleRunAgent = async () => {
     const merchantId = localStorage.getItem('merchantId')
     setLoading(true)
     setError(null)
     
-    // Add a 60-second timeout
+    // Add a 120-second timeout to allow the backend fallback to resolve
     const controller = new AbortController()
-    const timeoutId = setTimeout(() => controller.abort(), 60000)
+    const timeoutId = setTimeout(() => controller.abort(), 120000)
     
     try {
       const res = await fetch('http://localhost:8000/agent/run', {
@@ -60,53 +67,99 @@ export default function IntelligencePage() {
   }
 
   return (
-    <div className="space-y-8 animate-in fade-in duration-500 max-w-4xl mx-auto">
-      <div className="text-center space-y-4 py-8">
-        <div className="mx-auto w-16 h-16 bg-purple-100 rounded-full flex items-center justify-center mb-4">
-          <Sparkles className="w-8 h-8 text-purple-600" />
-        </div>
-        <h2 className="text-3xl font-bold text-gray-900 tracking-tight">AI Revenue Agent</h2>
-        <p className="text-gray-500 max-w-2xl mx-auto">
-          The Revenue Agent analyzes your historical campaign data, customer segments, and business rules to recommend the single most impactful action you can take right now.
-        </p>
+    <div className="space-y-8 animate-in fade-in duration-500 max-w-6xl mx-auto pb-12">
+      {/* Hero Section */}
+      <div className="relative bg-surface rounded-3xl overflow-hidden shadow-soft border border-border mb-12 group transition-all duration-500">
+        <div className="absolute inset-0 bg-gradient-to-br from-brand-primary/5 via-brand-teal/5 to-transparent pointer-events-none"></div>
         
-        {!loading && (
-          <button 
-            onClick={handleRunAgent}
-            className="mt-6 bg-purple-600 hover:bg-purple-700 text-white font-semibold px-8 py-3 rounded-full shadow-md hover:shadow-lg transition flex items-center gap-2 mx-auto"
-          >
-            <Activity size={20} />
-            {hasRun ? 'Run Agent Again' : 'Generate Growth Strategy'}
-          </button>
-        )}
+        {/* Animated ambient background */}
+        <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-brand-primary/10 rounded-full blur-[100px] pointer-events-none translate-x-1/3 -translate-y-1/3 group-hover:bg-brand-primary/15 transition-colors duration-700"></div>
+
+        <div className="relative z-10 flex flex-col items-center text-center p-12 md:p-20">
+          <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-brand-primary/10 text-brand-primary dark:bg-brand-primary/20 dark:text-brand-teal text-sm font-bold tracking-wide uppercase mb-8 border border-brand-primary/20">
+            <Sparkles size={16} className="animate-pulse" />
+            Decision Engine
+          </div>
+          
+          <h2 className="text-4xl md:text-6xl font-extrabold text-foreground tracking-tight leading-tight mb-6 max-w-3xl mx-auto">
+            Your AI-Powered <br className="hidden md:block"/>
+            <span className="text-transparent bg-clip-text bg-gradient-to-r from-brand-primary to-brand-teal">Revenue Strategist</span>
+          </h2>
+          
+          <p className="text-muted text-lg md:text-xl leading-relaxed max-w-2xl mb-12">
+            RAZZZ analyzes your customer segments and historical data to recommend high-converting offers with proven strategies.
+          </p>
+          
+          {!loading && (
+            <button 
+              onClick={handleRunAgent}
+              className="bg-brand-primary hover:bg-brand-teal text-white font-bold px-10 py-5 rounded-2xl shadow-sm hover:shadow-soft transition-all duration-300 flex items-center gap-3 text-lg hover:-translate-y-1"
+            >
+              <Activity size={24} />
+              {hasRun ? 'Run New Analysis' : 'Generate Strategy'}
+            </button>
+          )}
+        </div>
       </div>
 
+      {/* Feature Columns */}
+      {!hasRun && !loading && (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-8 px-4">
+          <div className="flex flex-col items-center text-center group">
+            <div className="w-20 h-20 bg-surface border border-border shadow-soft text-brand-primary rounded-2xl flex items-center justify-center mb-6 group-hover:scale-110 transition-transform duration-300">
+              <Users size={32} strokeWidth={1.5} />
+            </div>
+            <h3 className="font-bold text-foreground text-xl mb-3">Understand Customers</h3>
+            <p className="text-muted text-base leading-relaxed max-w-xs">Identify high-value segments and discover hidden revenue opportunities.</p>
+          </div>
+          <div className="flex flex-col items-center text-center group">
+            <div className="w-20 h-20 bg-surface border border-border shadow-soft text-brand-teal rounded-2xl flex items-center justify-center mb-6 group-hover:scale-110 transition-transform duration-300">
+              <Target size={32} strokeWidth={1.5} />
+            </div>
+            <h3 className="font-bold text-foreground text-xl mb-3">Launch Smart Campaigns</h3>
+            <p className="text-muted text-base leading-relaxed max-w-xs">Personalize offers that drive engagement and maximize sales automatically.</p>
+          </div>
+          <div className="flex flex-col items-center text-center group">
+            <div className="w-20 h-20 bg-surface border border-border shadow-soft text-emerald-600 rounded-2xl flex items-center justify-center mb-6 group-hover:scale-110 transition-transform duration-300">
+              <TrendingUp size={32} strokeWidth={1.5} />
+            </div>
+            <h3 className="font-bold text-foreground text-xl mb-3">Optimize & Grow</h3>
+            <p className="text-muted text-base leading-relaxed max-w-xs">Continuously refine your strategies for maximum revenue impact.</p>
+          </div>
+        </div>
+      )}
+
       {loading && (
-        <div className="space-y-6 max-w-2xl mx-auto">
-          <div className="bg-purple-50 p-6 rounded-xl border border-purple-100 text-center animate-pulse">
-             <div className="flex justify-center mb-4">
-               <div className="w-8 h-8 border-4 border-purple-600 border-t-transparent rounded-full animate-spin"></div>
+        <div className="space-y-6 max-w-3xl mx-auto">
+          <div className="bg-surface p-8 rounded-2xl border border-brand-teal/20 text-center shadow-sm relative overflow-hidden">
+             <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-brand-primary via-brand-teal to-brand-coral animate-pulse"></div>
+             <div className="flex justify-center mb-6">
+               <div className="w-10 h-10 border-4 border-brand-primary/20 border-t-brand-primary rounded-full animate-spin"></div>
              </div>
-             <p className="font-semibold text-purple-900 mb-1">Analyzing Data Signals...</p>
-             <p className="text-sm text-purple-700">Connecting segments, rules, and historical intelligence.</p>
+             <h3 className="text-xl font-bold text-foreground mb-2">Analyzing Data Signals</h3>
+             <p className="text-muted flex items-center justify-center gap-2">
+               <FileSearch size={16} /> Connecting segments, rules, and historical intelligence...
+             </p>
           </div>
         </div>
       )}
 
       {error && (
-        <div className="bg-red-50 border border-red-200 text-red-700 p-6 rounded-xl text-center font-medium max-w-2xl mx-auto">
+        <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-400 p-6 rounded-2xl text-center font-medium max-w-3xl mx-auto flex items-center justify-center gap-2">
           {error}
         </div>
       )}
 
       {!loading && !error && hasRun && data && (
-        <div className="max-w-3xl mx-auto">
+        <div className="max-w-4xl mx-auto animate-in slide-in-from-bottom-4 duration-500">
           {data.status === 'FAILED' ? (
-            <div className="bg-amber-50 border border-amber-200 text-amber-800 p-8 rounded-xl text-center">
-              <h3 className="text-xl font-bold mb-2">Analysis Failed</h3>
-              <p>{data.reason}</p>
+            <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-400 p-8 rounded-2xl text-center shadow-sm">
+              <h3 className="text-2xl font-bold mb-3">Analysis Failed</h3>
+              <p className="text-lg">{data.reason}</p>
               <div className="mt-6 flex justify-center gap-4 text-sm font-medium">
-                 <span className="bg-amber-100 px-3 py-1 rounded-full">Data Sufficiency: {data.data_sufficiency}</span>
+                 <span className="bg-amber-100 dark:bg-amber-900/40 px-4 py-2 rounded-lg border border-amber-200 dark:border-amber-800">
+                   Data Sufficiency: {data.data_sufficiency}
+                 </span>
               </div>
             </div>
           ) : (
@@ -120,14 +173,19 @@ export default function IntelligencePage() {
                 limitations={data.recommendation?.limitations}
               />
               
-              <div className="bg-white border border-gray-200 p-6 rounded-xl flex items-start gap-4">
+              <div className="bg-surface border border-border p-6 rounded-2xl flex items-start gap-4 shadow-sm">
+                 <div className="p-2 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded-lg">
+                   <ShieldCheck size={24} />
+                 </div>
                  <div className="flex-1">
-                   <h4 className="font-bold text-gray-900 mb-1">Guardrail Status</h4>
-                   <p className="text-gray-600 text-sm">{data.guardrail_result?.reason || 'Verified'}</p>
+                   <h4 className="font-bold text-foreground mb-1">Guardrail Status</h4>
+                   <p className="text-muted text-sm">{data.guardrail_result?.reason || 'Verified'}</p>
                  </div>
                  <div>
-                   <span className={`px-3 py-1 rounded-full text-sm font-bold ${
-                     data.status === 'GENERATED' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+                   <span className={`px-4 py-1.5 rounded-lg text-sm font-bold border ${
+                     data.status === 'GENERATED' 
+                      ? 'bg-green-100 text-green-800 border-green-200 dark:bg-green-900/30 dark:text-green-400 dark:border-green-800' 
+                      : 'bg-brand-peach/50 text-brand-coral border-brand-coral/20 dark:bg-brand-peach/20 dark:text-brand-coral dark:border-brand-coral/30'
                    }`}>
                      {data.status}
                    </span>

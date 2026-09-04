@@ -13,6 +13,11 @@ export default function CustomersPage() {
   useEffect(() => {
     const merchantId = localStorage.getItem('merchantId')
     
+    if (!merchantId) {
+      window.location.href = '/login'
+      return
+    }
+    
     async function fetchCustomers() {
       try {
         const res = await fetch(`http://localhost:8000/customers?merchant_id=${merchantId}`)
@@ -21,7 +26,7 @@ export default function CustomersPage() {
         }
         
         const json = await res.json()
-        setCustomers(json.items || [])
+        setCustomers(Array.isArray(json.items) ? json.items : [])
       } catch (err) {
         console.error("Customers fetch error:", err)
         setError(err.message || "Failed to load customers. Please try again.")
@@ -34,7 +39,7 @@ export default function CustomersPage() {
   }, [])
 
   // Aggregate segments
-  const segments = customers.reduce((acc, customer) => {
+  const segments = Array.isArray(customers) ? customers.reduce((acc, customer) => {
     const seg = customer.segment || 'Unknown'
     if (!acc[seg]) {
       acc[seg] = { count: 0, customers: [] }
@@ -42,14 +47,14 @@ export default function CustomersPage() {
     acc[seg].count += 1
     acc[seg].customers.push(customer)
     return acc
-  }, {})
+  }, {}) : {}
 
   if (loading) {
     return (
       <div className="space-y-6">
         <div>
-          <h2 className="text-2xl font-bold text-gray-900">Customer Segments</h2>
-          <p className="text-gray-500">Loading your customer data...</p>
+          <h2 className="text-2xl font-bold text-foreground">Customer Intelligence</h2>
+          <p className="text-muted">Analyzing your customer database...</p>
         </div>
         <LoadingSkeleton type="table" />
       </div>
@@ -58,7 +63,7 @@ export default function CustomersPage() {
 
   if (error) {
     return (
-      <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-lg">
+      <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-400 p-4 rounded-xl">
         Failed to load customers. Please try again.
       </div>
     )
@@ -66,13 +71,15 @@ export default function CustomersPage() {
 
   return (
     <div className="space-y-6 animate-in fade-in duration-500">
-      <div className="flex justify-between items-center">
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-border pb-6 mb-8">
         <div>
-          <h2 className="text-2xl font-bold text-gray-900 tracking-tight">Customer Segments</h2>
-          <p className="text-gray-500 mt-1">View your audience broken down by behavior.</p>
+          <h2 className="text-3xl font-bold text-foreground tracking-tight">Customer Intelligence</h2>
+          <p className="text-muted mt-2 text-lg">View your audience broken down by behavior and segment.</p>
         </div>
-        <div className="bg-white border border-gray-200 px-4 py-2 rounded-lg text-sm font-medium text-gray-700 flex items-center gap-2">
-          <Users size={16} className="text-gray-400" />
+        <div className="bg-surface border border-border px-5 py-3 rounded-xl text-sm font-bold text-foreground flex items-center gap-3 shadow-soft">
+          <div className="p-1.5 bg-brand-primary/10 rounded-lg">
+            <Users size={18} className="text-brand-primary dark:text-brand-teal" />
+          </div>
           {customers.length} Total Customers
         </div>
       </div>
@@ -80,20 +87,27 @@ export default function CustomersPage() {
       {customers.length === 0 ? (
         <EmptyState 
           title="No customers found" 
-          description="You don't have any customer data available for segmentation yet."
+          description="Upload a CSV dataset to start analyzing your customers."
         />
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {Object.entries(segments).map(([segment, data]) => (
-            <div key={segment} className="bg-white border border-gray-200 rounded-xl p-5 shadow-sm hover:shadow-md transition">
-              <div className="flex justify-between items-start mb-4">
-                <h3 className="font-bold text-gray-900 capitalize text-lg">{segment.replace(/_/g, ' ')}</h3>
-                <span className="bg-blue-50 text-blue-700 font-bold px-2.5 py-1 rounded-lg text-sm">
+            <div key={segment} className="bg-surface border border-border rounded-2xl p-8 shadow-soft hover:shadow-md hover:border-brand-primary/30 transition-all duration-300 group">
+              <div className="flex justify-between items-start mb-6">
+                <h3 className="font-bold text-foreground capitalize text-xl tracking-tight">{segment.replace(/_/g, ' ')}</h3>
+                <span className="bg-brand-primary/10 text-brand-primary dark:bg-brand-teal/10 dark:text-brand-teal font-bold px-4 py-1.5 rounded-lg text-sm border border-brand-primary/20 dark:border-brand-teal/20 group-hover:scale-105 transition-transform">
                   {data.count}
                 </span>
               </div>
-              <p className="text-sm text-gray-500">
-                {Math.round((data.count / customers.length) * 100)}% of your total audience
+              
+              <div className="w-full bg-background border border-border rounded-full h-3 mb-3 overflow-hidden">
+                <div 
+                  className="bg-brand-primary dark:bg-brand-teal h-full rounded-full transition-all duration-1000 ease-out" 
+                  style={{ width: `${Math.round((data.count / customers.length) * 100)}%` }}
+                ></div>
+              </div>
+              <p className="text-sm font-medium text-muted">
+                <strong className="text-foreground">{Math.round((data.count / customers.length) * 100)}%</strong> of your total audience
               </p>
             </div>
           ))}
