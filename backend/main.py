@@ -6,11 +6,21 @@ from dotenv import load_dotenv
 from database import merchants_collection, offers_collection, orders_collection, campaigns_collection, customers_collection, optimizations_collection, campaign_executions_collection
 from offer_service import generate_personalized_offer
 import uuid
+import os
+import logging
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timezone
 
 load_dotenv()
 
-app = FastAPI()
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Basic Setup
+app = FastAPI(title="RAZZZ AI Revenue Agent API")
 
 # Allow frontend (localhost:3000) to talk to backend
 app.add_middleware(
@@ -93,6 +103,42 @@ class RegisterRequest(BaseModel):
     email: str
     password: str
 
+def send_verification_email(to_email: str, token: str):
+    smtp_server = os.getenv("SMTP_SERVER", "smtp.gmail.com")
+    smtp_port = int(os.getenv("SMTP_PORT", 587))
+    smtp_username = os.getenv("SMTP_USERNAME")
+    smtp_password = os.getenv("SMTP_PASSWORD")
+    sender_email = os.getenv("SENDER_EMAIL", smtp_username)
+
+    if not smtp_username or not smtp_password:
+        logger.error("SMTP_USERNAME or SMTP_PASSWORD environment variables are missing.")
+        raise Exception("Email service is not configured.")
+
+    verification_link = f"http://localhost:3000/verify-email?token={token}"
+    
+    msg = MIMEMultipart()
+    msg['From'] = sender_email
+    msg['To'] = to_email
+    msg['Subject'] = "Verify your RAZZZ account"
+
+    body = f"Hello,\n\nPlease verify your RAZZZ account by clicking the following link:\n{verification_link}\n\nThanks,\nThe RAZZZ Team"
+    msg.attach(MIMEText(body, 'plain'))
+
+    try:
+        logger.info(f"Attempting to send verification email to {to_email} via {smtp_server}:{smtp_port}")
+        server = smtplib.SMTP(smtp_server, smtp_port)
+        server.starttls()
+        server.login(smtp_username, smtp_password)
+        server.send_message(msg)
+        server.quit()
+        logger.info(f"Verification email successfully sent to {to_email}")
+    except smtplib.SMTPAuthenticationError as e:
+        logger.error(f"SMTP Authentication failed for {smtp_username}: {e}")
+        raise Exception("Email authentication failed.") from e
+    except Exception as e:
+        logger.error(f"Failed to send email to {to_email}: {e}")
+        raise Exception("Failed to send verification email.") from e
+
 @app.post("/auth/register")
 def register(request: RegisterRequest):
     try:
@@ -120,16 +166,18 @@ def register(request: RegisterRequest):
         
         merchants_collection.insert_one(merchant_doc)
         
-        print("\n" + "="*50)
-        print("DEV MODE: Verification Email Simulation")
-        print(f"To: {request.email}")
-        print(f"Link: http://localhost:3000/verify-email?token={verification_token}")
-        print("="*50 + "\n")
+        try:
+            send_verification_email(request.email, verification_token)
+        except Exception as e:
+            # If email fails, we should probably rollback the user creation or let them know it failed.
+            # We'll just raise an error so the frontend knows verification wasn't sent.
+            raise HTTPException(status_code=500, detail=f"User registered, but failed to send verification email: {str(e)}")
         
         return {"status": "success", "message": "Registration successful. Please check your email to verify your account."}
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"Registration failed: {e}")
         raise HTTPException(status_code=500, detail="Registration failed")
 
 class TokenRequest(BaseModel):
@@ -171,14 +219,16 @@ def resend_verification(request: ResendVerificationRequest):
             {"$set": {"verification_token": verification_token}}
         )
         
-        print("\n" + "="*50)
-        print("DEV MODE: Resend Verification Email Simulation")
-        print(f"To: {request.email}")
-        print(f"Link: http://localhost:3000/verify-email?token={verification_token}")
-        print("="*50 + "\n")
+        try:
+            send_verification_email(request.email, verification_token)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to resend verification email: {str(e)}")
         
         return {"status": "success", "message": "If an account exists, a verification email was sent."}
+    except HTTPException:
+        raise
     except Exception as e:
+        logger.error(f"Failed to resend verification: {e}")
         raise HTTPException(status_code=500, detail="Failed to resend verification")
 
 class ForgotPasswordRequest(BaseModel):
