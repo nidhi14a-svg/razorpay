@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { LayoutDashboard, Users, Megaphone, Brain, TrendingUp, LogOut, BarChart3, Menu, X, Sliders } from 'lucide-react'
 import { ThemeToggle } from '@/components/ThemeToggle'
+import { getApiUrl } from '@/lib/api'
 
 export default function DashboardLayout({ children }) {
   const pathname = usePathname()
@@ -27,7 +28,7 @@ export default function DashboardLayout({ children }) {
     
     setBusinessName(name || 'Your Business')
 
-    fetch(`http://localhost:8000/merchants/${id}/onboarding-status`, {
+    fetch(getApiUrl(`/merchants/${id}/onboarding-status`), {
       headers: {
         'Authorization': `Bearer ${token}`
       }

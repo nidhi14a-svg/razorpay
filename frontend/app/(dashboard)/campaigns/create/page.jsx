@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { Sparkles, ArrowLeft, CheckCircle2 } from 'lucide-react'
+import { getApiUrl } from '@/lib/api'
 
 export default function CreateCampaignPage() {
   const [goal, setGoal] = useState('')
@@ -20,7 +21,7 @@ export default function CreateCampaignPage() {
     const merchantId = localStorage.getItem('merchantId')
 
     try {
-      const response = await fetch('http://localhost:8000/campaigns', {
+      const response = await fetch(getApiUrl('/campaigns'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

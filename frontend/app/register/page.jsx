@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { Eye, EyeOff, Mail, Lock, Building, User, CheckCircle2 } from 'lucide-react'
+import { getApiUrl } from '@/lib/api'
 
 export default function Register() {
   const [formData, setFormData] = useState({
@@ -18,6 +19,7 @@ export default function Register() {
   const [error, setError] = useState('')
   const [success, setSuccess] = useState(false)
   const [verificationRequired, setVerificationRequired] = useState(true)
+  const router = useRouter()
 
   const handleInputChange = (e) => {
     const { name, value } = e.target
@@ -42,7 +44,7 @@ export default function Register() {
     }
 
     try {
-      const response = await fetch('http://localhost:8000/auth/register', {
+      const response = await fetch(getApiUrl('/auth/register'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

@@ -19,6 +19,7 @@ import {
   DollarSign,
   UploadCloud
 } from 'lucide-react'
+import { getApiUrl } from '@/lib/api'
 
 export default function CustomersPage() {
   const [customers, setCustomers] = useState([])
@@ -64,7 +65,7 @@ export default function CustomersPage() {
         params.append('search', searchQuery.trim())
       }
 
-      const res = await fetch(`http://localhost:8000/customers?${params.toString()}`)
+      const res = await fetch(getApiUrl(`/customers?${params.toString()}`))
       if (!res.ok) {
         throw new Error(`Failed to load customers (Status: ${res.status})`)
       }

@@ -1,10 +1,23 @@
+# Environment variables
 .env
-.env.local
+.env.*
+!.env.example
+*.env
+
+# Dependencies & virtual environments
 venv/
+.venv/
 node_modules/
+
+# Build artifacts & caches
 __pycache__/
-.next/
 *.pyc
-.DS_Store
+.next/
 dist/
 build/
+.pytest_cache/
+
+# OS and IDE files
+.DS_Store
+*.pem
+*.log

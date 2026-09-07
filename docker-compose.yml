@@ -1,0 +1,37 @@
+version: '3.8'
+
+services:
+  mongodb:
+    image: mongo:7.0
+    container_name: razzz-mongo
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    environment:
+      - MONGO_INITDB_DATABASE=smart_segmentation
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: razzz-backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - MONGODB_URI=mongodb://mongodb:27017/smart_segmentation
+      - DB_NAME=smart_segmentation
+      - PORT=8000
+      - CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
+      - FRONTEND_URL=http://localhost:3000
+      - REQUIRE_EMAIL_VERIFICATION=false
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - RAZORPAY_KEY_ID=${RAZORPAY_KEY_ID}
+      - RAZORPAY_KEY_SECRET=${RAZORPAY_KEY_SECRET}
+    depends_on:
+      - mongodb
+
+volumes:
+  mongo_data:

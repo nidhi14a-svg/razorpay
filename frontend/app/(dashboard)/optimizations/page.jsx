@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { EmptyState } from '@/components/EmptyState'
 import { OptimizationCard } from '@/components/OptimizationCard'
 import { LoadingSkeleton } from '@/components/LoadingSkeleton'
+import { getApiUrl } from '@/lib/api'
 
 export default function OptimizationsPage() {
   const [optimizations, setOptimizations] = useState([])
@@ -21,7 +22,7 @@ export default function OptimizationsPage() {
     
     async function fetchData() {
       try {
-        const optRes = await fetch(`http://localhost:8000/optimizations?merchant_id=${merchantId}`)
+        const optRes = await fetch(getApiUrl(`/optimizations?merchant_id=${merchantId}`))
         if (!optRes.ok) {
           throw new Error(`Failed to fetch optimizations (Status: ${optRes.status})`)
         }
@@ -42,7 +43,7 @@ export default function OptimizationsPage() {
   const handleAction = async (optId, action) => {
     setActionLoading(true)
     try {
-      const url = `http://localhost:8000/optimizations/${optId}/${action}?merchant_id=${merchantId}`
+      const url = getApiUrl(`/optimizations/${optId}/${action}?merchant_id=${merchantId}`)
       
       const body = action === 'reject' ? JSON.stringify({ reason: "Rejected by merchant" }) : null
       const headers = action === 'reject' ? { 'Content-Type': 'application/json' } : {}

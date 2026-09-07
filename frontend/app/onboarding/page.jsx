@@ -38,6 +38,7 @@ import {
   ShoppingBag,
   PackageCheck
 } from 'lucide-react'
+import { getApiUrl } from '@/lib/api'
 import Link from 'next/link'
 import { ThemeToggle } from '@/components/ThemeToggle'
 
@@ -122,7 +123,7 @@ function OnboardingContent() {
     }
 
     // Fetch onboarding status & existing profile & guardrails from backend
-    fetch(`http://localhost:8000/merchants/${id}/onboarding-status`, {
+    fetch(getApiUrl(`/merchants/${id}/onboarding-status`), {
       headers: { 'Authorization': `Bearer ${tok}` }
     })
       .then(res => {
@@ -161,7 +162,7 @@ function OnboardingContent() {
       })
 
     // Fetch full profile if available
-    fetch(`http://localhost:8000/merchants/${id}/profile`)
+    fetch(getApiUrl(`/merchants/${id}/profile`))
       .then(res => res.ok ? res.json() : null)
       .then(prof => {
         if (prof) {
@@ -198,7 +199,7 @@ function OnboardingContent() {
     setError(null)
 
     try {
-      const res = await fetch(`http://localhost:8000/merchants/${merchantId}/profile`, {
+      const res = await fetch(getApiUrl(`/merchants/${merchantId}/profile`), {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -284,7 +285,7 @@ function OnboardingContent() {
         contact_frequency_days: guardrails.contact_frequency_days ? parseInt(guardrails.contact_frequency_days) : null
       }
 
-      const res = await fetch(`http://localhost:8000/merchants/${merchantId}/guardrails`, {
+      const res = await fetch(getApiUrl(`/merchants/${merchantId}/guardrails`), {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -381,7 +382,7 @@ function OnboardingContent() {
         const formData = new FormData()
         formData.append('file', singleFile)
 
-        const res = await fetch('http://localhost:8000/customers/validate-csv', {
+        const res = await fetch(getApiUrl('/customers/validate-csv'), {
           method: 'POST',
           headers: { 'Authorization': 'Bearer ' + token },
           body: formData
@@ -402,7 +403,7 @@ function OnboardingContent() {
         formData.append('orders_file', ordersFile)
         formData.append('order_items_file', orderItemsFile)
 
-        const res = await fetch('http://localhost:8000/customers/validate-multi-csv', {
+        const res = await fetch(getApiUrl('/customers/validate-multi-csv'), {
           method: 'POST',
           headers: { 'Authorization': 'Bearer ' + token },
           body: formData
@@ -435,7 +436,7 @@ function OnboardingContent() {
         formData.append('file', singleFile)
         formData.append('mode', importMode)
 
-        const response = await fetch('http://localhost:8000/customers/upload', {
+        const response = await fetch(getApiUrl('/customers/upload'), {
           method: 'POST',
           headers: { 'Authorization': 'Bearer ' + token },
           body: formData,
@@ -463,7 +464,7 @@ function OnboardingContent() {
         formData.append('order_items_file', orderItemsFile)
         formData.append('mode', importMode)
 
-        const response = await fetch('http://localhost:8000/customers/upload-multi', {
+        const response = await fetch(getApiUrl('/customers/upload-multi'), {
           method: 'POST',
           headers: { 'Authorization': 'Bearer ' + token },
           body: formData,
@@ -497,7 +498,7 @@ function OnboardingContent() {
     setError(null)
 
     try {
-      const response = await fetch('http://localhost:8000/customers/demo', {
+      const response = await fetch(getApiUrl('/customers/demo'), {
         method: 'POST',
         headers: { 'Authorization': 'Bearer ' + token }
       })

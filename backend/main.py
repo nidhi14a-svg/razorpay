@@ -23,14 +23,43 @@ logger = logging.getLogger(__name__)
 # Basic Setup
 app = FastAPI(title="RAZZZ AI Revenue Agent API")
 
-# Allow frontend (localhost:3000) to talk to backend
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# Configuration from Environment Variables
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000").rstrip("/")
+MAX_CSV_FILE_SIZE_MB = int(os.getenv("MAX_CSV_FILE_SIZE_MB", "50"))
+MAX_CSV_FILE_SIZE_BYTES = MAX_CSV_FILE_SIZE_MB * 1024 * 1024
+
+# Dynamic CORS Middleware
+cors_origins_env = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000")
+allowed_origins = [orig.strip() for orig in cors_origins_env.split(",") if orig.strip()]
+if not allowed_origins:
+    allowed_origins = ["http://localhost:3000", "http://127.0.0.1:3000"]
+
+if "*" in allowed_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=False,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+else:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=allowed_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+@app.on_event("startup")
+def startup_checks():
+    logger.info("Starting RAZZZ AI Revenue Agent API...")
+    logger.info(f"Configured CORS origins: {allowed_origins}")
+    logger.info(f"Configured Frontend URL: {FRONTEND_URL}")
+    if not os.getenv("OPENROUTER_API_KEY"):
+        logger.warning("OPENROUTER_API_KEY is not configured in environment. AI recommendation engine will run in deterministic fallback mode.")
+    if not os.getenv("RAZORPAY_KEY_ID") or not os.getenv("RAZORPAY_KEY_SECRET"):
+        logger.warning("Razorpay credentials not fully configured in environment. Coupon/Payment links will run in simulation mode.")
 
 class LoginRequest(BaseModel):
     email: str
@@ -181,7 +210,7 @@ def send_verification_email(to_email: str, token: str):
         logger.error("SMTP_USERNAME or SMTP_PASSWORD environment variables are missing.")
         raise Exception("Email service is not configured.")
 
-    verification_link = f"http://localhost:3000/verify-email?token={token}"
+    verification_link = f"{FRONTEND_URL}/verify-email?token={token}"
     
     msg = MIMEMultipart()
     msg['From'] = sender_email
@@ -230,7 +259,7 @@ def register(request: RegisterRequest):
         }
         
         merchants_collection.insert_one(merchant_doc)
-        print(f"[AUTH DEV] Verification link: http://localhost:3000/verify-email?token={verification_token}")
+        print(f"[AUTH DEV] Verification link: {FRONTEND_URL}/verify-email?token={verification_token}")
         
         try:
             send_verification_email(request.email, verification_token)
@@ -321,7 +350,7 @@ def forgot_password(request: ForgotPasswordRequest):
         print("\n" + "="*50)
         print("DEV MODE: Password Reset Email Simulation")
         print(f"To: {request.email}")
-        print(f"Link: http://localhost:3000/reset-password?token={reset_token}")
+        print(f"Link: {FRONTEND_URL}/reset-password?token={reset_token}")
         print("="*50 + "\n")
         
         return {"status": "success", "message": "If an account exists with that email, a password reset link has been sent."}
@@ -1211,11 +1240,19 @@ async def validate_csv_endpoint(
 ):
     """Validates CSV format, auto-detects column mapping, aggregates metrics, and returns preview."""
     try:
+        if not file.filename.lower().endswith(".csv"):
+            raise HTTPException(status_code=400, detail=f"File '{file.filename}' must be a valid CSV file (.csv extension required).")
         content = await file.read()
+        if len(content) == 0:
+            raise HTTPException(status_code=400, detail=f"File '{file.filename}' is empty.")
+        if len(content) > MAX_CSV_FILE_SIZE_BYTES:
+            raise HTTPException(status_code=400, detail=f"File '{file.filename}' exceeds maximum allowed size of {MAX_CSV_FILE_SIZE_MB}MB.")
         from csv_processor import validate_and_preview_csv
         return validate_and_preview_csv(content, file.filename)
     except ValueError as ve:
         raise HTTPException(status_code=400, detail=str(ve))
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"Error validating CSV: {e}")
         raise HTTPException(status_code=400, detail=f"CSV Validation Error: {str(e)}")
@@ -1228,11 +1265,19 @@ async def upload_customers(
 ):
     """Parses customer/transaction CSV, computes behavioral metrics, segments customers, and imports into DB."""
     try:
+        if not file.filename.lower().endswith(".csv"):
+            raise HTTPException(status_code=400, detail=f"File '{file.filename}' must be a valid CSV file (.csv extension required).")
         content = await file.read()
+        if len(content) == 0:
+            raise HTTPException(status_code=400, detail=f"File '{file.filename}' is empty.")
+        if len(content) > MAX_CSV_FILE_SIZE_BYTES:
+            raise HTTPException(status_code=400, detail=f"File '{file.filename}' exceeds maximum allowed size of {MAX_CSV_FILE_SIZE_MB}MB.")
         from csv_processor import import_processed_csv
         return import_processed_csv(content, file.filename, merchant_id, mode=mode.lower().strip())
     except ValueError as ve:
         raise HTTPException(status_code=400, detail=str(ve))
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"Error importing CSV: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to import customer dataset: {str(e)}")
@@ -1252,6 +1297,12 @@ async def validate_multi_csv_endpoint(
         cust_content = await customers_file.read()
         ord_content = await orders_file.read()
         items_content = await order_items_file.read()
+
+        for f, content in [(customers_file, cust_content), (orders_file, ord_content), (order_items_file, items_content)]:
+            if len(content) == 0:
+                raise HTTPException(status_code=400, detail=f"File '{f.filename}' is empty.")
+            if len(content) > MAX_CSV_FILE_SIZE_BYTES:
+                raise HTTPException(status_code=400, detail=f"File '{f.filename}' exceeds maximum allowed size of {MAX_CSV_FILE_SIZE_MB}MB.")
         
         from csv_processor import validate_and_preview_relational_csv
         return validate_and_preview_relational_csv(
@@ -1287,6 +1338,12 @@ async def upload_multi_customers(
         cust_content = await customers_file.read()
         ord_content = await orders_file.read()
         items_content = await order_items_file.read()
+
+        for f, content in [(customers_file, cust_content), (orders_file, ord_content), (order_items_file, items_content)]:
+            if len(content) == 0:
+                raise HTTPException(status_code=400, detail=f"File '{f.filename}' is empty.")
+            if len(content) > MAX_CSV_FILE_SIZE_BYTES:
+                raise HTTPException(status_code=400, detail=f"File '{f.filename}' exceeds maximum allowed size of {MAX_CSV_FILE_SIZE_MB}MB.")
 
         from csv_processor import import_processed_relational_csv
         return import_processed_relational_csv(
@@ -1806,3 +1863,10 @@ def run_revenue_agent_route(request: AgentRunRequest):
     except Exception as e:
         print(f"Error in run_revenue_agent_route: {e}")
         raise HTTPException(status_code=500, detail="Internal Server Error")
+
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.getenv("PORT", 8000))
+    host = os.getenv("HOST", "0.0.0.0")
+    logger.info(f"Running FastAPI on {host}:{port}...")
+    uvicorn.run("main:app", host=host, port=port, reload=False)

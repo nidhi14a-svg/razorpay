@@ -15,6 +15,7 @@ import {
   PieChart, 
   Filter 
 } from 'lucide-react'
+import { getApiUrl } from '@/lib/api'
 
 export default function DashboardPage() {
   const [data, setData] = useState(null)
@@ -31,7 +32,7 @@ export default function DashboardPage() {
     
     async function fetchDashboard() {
       try {
-        const res = await fetch(`http://localhost:8000/merchants/${merchantId}/dashboard-summary`)
+        const res = await fetch(getApiUrl(`/merchants/${merchantId}/dashboard-summary`))
         if (!res.ok) throw new Error('Failed to fetch dashboard metrics')
         const json = await res.json()
         setData(json)

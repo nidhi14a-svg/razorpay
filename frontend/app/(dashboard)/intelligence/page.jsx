@@ -7,6 +7,7 @@ import { AIInsightCard } from '@/components/AIInsightCard'
 import { EmptyState } from '@/components/EmptyState'
 import { LoadingSkeleton } from '@/components/LoadingSkeleton'
 import { Sparkles, Activity, FileSearch, ShieldCheck, Users, Target, TrendingUp } from 'lucide-react'
+import { getApiUrl } from '@/lib/api'
 
 export default function IntelligencePage() {
   const [data, setData] = useState(null)
@@ -31,7 +32,7 @@ export default function IntelligencePage() {
     const timeoutId = setTimeout(() => controller.abort(), 120000)
     
     try {
-      const res = await fetch('http://localhost:8000/agent/run', {
+      const res = await fetch(getApiUrl('/agent/run'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ merchant_id: merchantId }),

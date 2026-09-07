@@ -4,6 +4,7 @@ import { useEffect, useState, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { CheckCircle2, XCircle, Loader2 } from 'lucide-react'
+import { getApiUrl } from '@/lib/api'
 
 function VerifyEmailContent() {
   const searchParams = useSearchParams()
@@ -21,7 +22,7 @@ function VerifyEmailContent() {
 
     const verifyToken = async () => {
       try {
-        const response = await fetch('http://localhost:8000/auth/verify-email', {
+        const response = await fetch(getApiUrl('/auth/verify-email'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ token }),

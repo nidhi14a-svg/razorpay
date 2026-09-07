@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { Eye, EyeOff, Mail, Lock, ShieldCheck, ArrowRight } from 'lucide-react'
+import { getApiUrl } from '@/lib/api'
 
 export default function Login() {
   const [email, setEmail] = useState('')
@@ -24,7 +25,7 @@ export default function Login() {
     setResendStatus('')
 
     try {
-      const response = await fetch('http://localhost:8000/auth/login', {
+      const response = await fetch(getApiUrl('/auth/login'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password }),
@@ -65,7 +66,7 @@ export default function Login() {
   const handleResendVerification = async () => {
     setLoading(true)
     try {
-      const response = await fetch('http://localhost:8000/auth/resend-verification', {
+      const response = await fetch(getApiUrl('/auth/resend-verification'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email }),

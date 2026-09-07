@@ -7,6 +7,7 @@ import { ArrowLeft, Target, TrendingUp, IndianRupee, PieChart, Users, Settings, 
 import { StatusBadge } from '@/components/StatusBadge'
 import { LoadingSkeleton } from '@/components/LoadingSkeleton'
 import { MetricCard } from '@/components/MetricCard'
+import { getApiUrl } from '@/lib/api'
 
 export default function CampaignDetailPage() {
   const params = useParams()
@@ -30,10 +31,10 @@ export default function CampaignDetailPage() {
     async function fetchData() {
       try {
         const [campRes, offersRes, analyticsRes, executionRes] = await Promise.all([
-          fetch(`http://localhost:8000/campaigns/${params.id}?merchant_id=${merchantId}`),
-          fetch(`http://localhost:8000/campaigns/${params.id}/offers?merchant_id=${merchantId}`),
-          fetch(`http://localhost:8000/campaigns/${params.id}/analytics?merchant_id=${merchantId}`),
-          fetch(`http://localhost:8000/campaigns/${params.id}/execution?merchant_id=${merchantId}`)
+          fetch(getApiUrl(`/campaigns/${params.id}?merchant_id=${merchantId}`)),
+          fetch(getApiUrl(`/campaigns/${params.id}/offers?merchant_id=${merchantId}`)),
+          fetch(getApiUrl(`/campaigns/${params.id}/analytics?merchant_id=${merchantId}`)),
+          fetch(getApiUrl(`/campaigns/${params.id}/execution?merchant_id=${merchantId}`))
         ])
 
         if (!campRes.ok) throw new Error('Campaign not found')
@@ -73,7 +74,7 @@ export default function CampaignDetailPage() {
     }
 
     try {
-      const res = await fetch(`http://localhost:8000/campaigns/${params.id}/execute`, {
+      const res = await fetch(getApiUrl(`/campaigns/${params.id}/execute`), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ merchant_id: merchantId })
@@ -94,8 +95,8 @@ export default function CampaignDetailPage() {
       
       // Refresh offers to get coupon codes and analytics for simulated demo results
       const [offersRes, analyticsRes] = await Promise.all([
-        fetch(`http://localhost:8000/campaigns/${params.id}/offers?merchant_id=${merchantId}`),
-        fetch(`http://localhost:8000/campaigns/${params.id}/analytics?merchant_id=${merchantId}`)
+        fetch(getApiUrl(`/campaigns/${params.id}/offers?merchant_id=${merchantId}`)),
+        fetch(getApiUrl(`/campaigns/${params.id}/analytics?merchant_id=${merchantId}`))
       ])
       
       if (offersRes.ok) {

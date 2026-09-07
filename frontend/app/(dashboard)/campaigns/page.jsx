@@ -6,6 +6,7 @@ import { EmptyState } from '@/components/EmptyState'
 import { StatusBadge } from '@/components/StatusBadge'
 import { LoadingSkeleton } from '@/components/LoadingSkeleton'
 import { PlusCircle, Search, Calendar, ChevronRight } from 'lucide-react'
+import { getApiUrl } from '@/lib/api'
 
 export default function CampaignsPage() {
   const [campaigns, setCampaigns] = useState([])
@@ -23,7 +24,7 @@ export default function CampaignsPage() {
     
     async function fetchCampaigns() {
       try {
-        const res = await fetch(`http://localhost:8000/campaigns?merchant_id=${merchantId}`)
+        const res = await fetch(getApiUrl(`/campaigns?merchant_id=${merchantId}`))
         if (!res.ok) {
           throw new Error(`Failed to fetch campaigns (Status: ${res.status})`)
         }
