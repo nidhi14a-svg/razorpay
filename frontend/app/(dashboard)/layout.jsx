@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
-import { LayoutDashboard, Users, Megaphone, Brain, TrendingUp, LogOut, BarChart3, Menu, X } from 'lucide-react'
+import { LayoutDashboard, Users, Megaphone, Brain, TrendingUp, LogOut, BarChart3, Menu, X, Sliders } from 'lucide-react'
 import { ThemeToggle } from '@/components/ThemeToggle'
 
 export default function DashboardLayout({ children }) {
@@ -11,22 +11,73 @@ export default function DashboardLayout({ children }) {
   const router = useRouter()
   const [businessName, setBusinessName] = useState('Loading...')
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
+  const [isAuthorized, setIsAuthorized] = useState(false)
+  const [missingGuardrails, setMissingGuardrails] = useState(false)
 
   useEffect(() => {
     const id = localStorage.getItem('merchantId')
+    const token = localStorage.getItem('token')
     const name = localStorage.getItem('businessName')
+    const onboardingCompleted = localStorage.getItem('onboardingCompleted')
     
-    if (!id) {
-      router.push('/login')
-    } else {
-      setBusinessName(name || 'Your Business')
+    if (!id || !token) {
+      router.replace('/login')
+      return
     }
-  }, [router])
+    
+    setBusinessName(name || 'Your Business')
+
+    fetch(`http://localhost:8000/merchants/${id}/onboarding-status`, {
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    })
+      .then(res => {
+        if (!res.ok) throw new Error('Status check failed')
+        return res.json()
+      })
+      .then(status => {
+        if (status.onboarding_completed) {
+          localStorage.setItem('onboardingCompleted', 'true')
+          setIsAuthorized(true)
+          if (!status.has_guardrails) {
+            setMissingGuardrails(true)
+          } else {
+            setMissingGuardrails(false)
+          }
+        } else {
+          localStorage.setItem('onboardingCompleted', 'false')
+          router.replace('/onboarding')
+        }
+      })
+      .catch(err => {
+        console.error("Failed to check onboarding status:", err)
+        // If network error but we have local authorization flag, allow grace
+        if (onboardingCompleted === 'true') {
+          setIsAuthorized(true)
+        } else {
+          router.replace('/onboarding')
+        }
+      })
+  }, [router, pathname])
 
   const handleLogout = () => {
     localStorage.removeItem('merchantId')
     localStorage.removeItem('businessName')
+    localStorage.removeItem('token')
+    localStorage.removeItem('onboardingCompleted')
     router.push('/login')
+  }
+
+  if (!isAuthorized) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-background">
+        <div className="flex flex-col items-center gap-3">
+          <div className="w-10 h-10 border-4 border-brand-primary border-t-transparent rounded-full animate-spin"></div>
+          <p className="text-sm text-muted font-medium">Loading workspace...</p>
+        </div>
+      </div>
+    )
   }
 
   const navItems = [
@@ -139,6 +190,25 @@ export default function DashboardLayout({ children }) {
         </header>
 
         <main className="flex-1 p-4 md:p-8 lg:p-10 max-w-7xl mx-auto w-full">
+          {missingGuardrails && (
+            <div className="mb-6 p-4 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/50 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-sm animate-in fade-in duration-300">
+              <div className="flex items-center gap-3 text-amber-800 dark:text-amber-300">
+                <div className="w-9 h-9 rounded-lg bg-amber-100 dark:bg-amber-900/50 flex items-center justify-center shrink-0">
+                  <Sliders className="w-5 h-5 text-amber-600 dark:text-amber-400" />
+                </div>
+                <div>
+                  <p className="text-sm font-bold">Complete your merchant settings before generating campaigns.</p>
+                  <p className="text-xs text-amber-700/90 dark:text-amber-400/90">Merchant guardrail rules are required so that AI campaigns strictly follow your discount caps and order limits.</p>
+                </div>
+              </div>
+              <Link
+                href="/onboarding?step=guardrails"
+                className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold rounded-lg transition-colors shrink-0 text-center shadow-sm"
+              >
+                Configure Guardrails
+              </Link>
+            </div>
+          )}
           {children}
         </main>
       </div>

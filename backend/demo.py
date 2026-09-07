@@ -16,7 +16,8 @@ def clear_demo_data(merchant_id="demo_merchant_001"):
     campaigns_collection.delete_many({"merchant_id": merchant_id})
     offers_collection.delete_many({"merchant_id": merchant_id})
     optimizations_collection.delete_many({"merchant_id": merchant_id})
-    merchants_collection.delete_many({"merchant_id": merchant_id})
+    if merchant_id == "demo_merchant_001":
+        merchants_collection.delete_many({"merchant_id": merchant_id})
 
 def setup_demo_data(merchant_id="demo_merchant_001"):
     """Create demo merchant and a diverse set of realistic customers."""
@@ -24,23 +25,45 @@ def setup_demo_data(merchant_id="demo_merchant_001"):
     # 1. Clean up existing demo state
     clear_demo_data(merchant_id)
     
-    print("Setting up realistic demo data...")
+    print(f"Setting up realistic demo data for {merchant_id}...")
     
-    # 2. Create demo merchant
-    merchant = {
-        "merchant_id": merchant_id,
-        "email": "demo@example.com",
-        "password": "demo123", # For demo purposes
-        "business_name": "Summer Store (Demo)",
-        "rules": {
-            "max_discount_percentage": 25,
-            "min_margin_percentage": 30,
-            "budget_per_week": 50000
+    # 2. Create demo merchant only if default demo merchant
+    if merchant_id == "demo_merchant_001":
+        merchant = {
+            "merchant_id": merchant_id,
+            "email": "demo@example.com",
+            "password": "demo123", # For demo purposes
+            "business_name": "Summer Store (Demo)",
+            "onboarding_completed": True,
+            "rules": {
+                "max_discount_percentage": 25,
+                "min_margin_percentage": 30,
+                "budget_per_week": 50000
+            }
         }
-    }
-    
-    merchants_collection.insert_one(merchant)
-    print("✓ Demo merchant created")
+        merchants_collection.insert_one(merchant)
+        print("✓ Demo merchant created")
+    else:
+        existing_merchant = merchants_collection.find_one({"merchant_id": merchant_id})
+        update_fields = {
+            "onboarding_completed": True,
+            "onboarding_step": "completed"
+        }
+        if not existing_merchant or not existing_merchant.get("rules"):
+            update_fields["rules"] = {
+                "max_discount_percentage": 20.0,
+                "min_order_value": 500.0,
+                "free_shipping_allowed": True,
+                "max_campaign_budget": 50000.0,
+                "high_value_customer_protection": True,
+                "contact_frequency_days": 7,
+                "min_margin_percentage": 25.0
+            }
+        merchants_collection.update_one(
+            {"merchant_id": merchant_id},
+            {"$set": update_fields}
+        )
+        print(f"✓ Updated onboarding status and rules for merchant: {merchant_id}")
     
     # 3. Generate Diverse Customers
     # We want ~40 customers. Let's create groups of archetypes to ensure diversity.
@@ -79,9 +102,10 @@ def setup_demo_data(merchant_id="demo_merchant_001"):
             first_name = random.choice(names)
             last_name = random.choice(surnames)
             
+            cust_unique_id = f"demo_cust_{customer_idx:03d}" if merchant_id == "demo_merchant_001" else f"{merchant_id}_cust_{customer_idx:03d}"
             customer = {
-                "id": f"demo_cust_{customer_idx:03d}",
-                "customer_id": f"demo_cust_{customer_idx:03d}", # For backwards compatibility if any
+                "id": cust_unique_id,
+                "customer_id": cust_unique_id, # For backwards compatibility if any
                 "merchant_id": merchant_id,
                 "name": f"{first_name} {last_name}",
                 "email": f"{first_name.lower()}.{last_name.lower()}@example.com",

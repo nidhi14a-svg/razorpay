@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Query, File, UploadFile, Form
+from fastapi import FastAPI, HTTPException, Query, File, UploadFile, Form, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, Any, Dict
@@ -8,6 +8,7 @@ from offer_service import generate_personalized_offer
 import uuid
 import os
 import logging
+import secrets
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -42,6 +43,26 @@ class CustomerProfile(BaseModel):
     lifetime_value: Optional[float] = None
     cart_status: Optional[str] = None
     average_order_value: Optional[float] = None
+
+from guardrails import validate_merchant_guardrails
+
+class GuardrailsRequest(BaseModel):
+    max_discount_percentage: Optional[float] = None
+    min_order_value: Optional[float] = 0.0
+    free_shipping_allowed: Optional[bool] = True
+    max_campaign_budget: Optional[float] = None
+    high_value_customer_protection: Optional[bool] = True
+    contact_frequency_days: Optional[int] = 7
+    min_margin_percentage: Optional[float] = None
+
+class BusinessProfileRequest(BaseModel):
+    full_name: Optional[str] = None
+    business_name: str
+    business_category: Optional[str] = "E-commerce"
+    business_description: Optional[str] = ""
+
+# Development bypass: set to False in .env to allow localhost testing without email verification
+REQUIRE_EMAIL_VERIFICATION = os.getenv("REQUIRE_EMAIL_VERIFICATION", "false").lower() in ("true", "1", "yes")
 
 import hashlib
 import os
@@ -80,22 +101,68 @@ def login(request: LoginRequest):
         if not verify_password(merchant.get("password"), request.password):
             raise HTTPException(status_code=401, detail="Invalid email or password")
             
-        if not merchant.get("email_verified", True):
+        # Email verification check (bypassed in development mode when REQUIRE_EMAIL_VERIFICATION=False)
+        if REQUIRE_EMAIL_VERIFICATION and not merchant.get("email_verified", True):
             return {
                 "requires_verification": True,
                 "email": merchant.get("email"),
                 "detail": "Email address must be verified before logging in."
             }
         
+        has_business_info = bool(merchant.get("business_name"))
+        has_guardrails = bool(
+            merchant.get("rules") and 
+            merchant.get("rules", {}).get("max_discount_percentage") is not None and
+            merchant.get("rules", {}).get("min_margin_percentage") is not None
+        )
+        has_customers = customers_collection.count_documents({"merchant_id": merchant.get("merchant_id")}) > 0
+        
+        onboarding_completed = bool(
+            (merchant.get("onboarding_completed") is True and has_business_info and has_guardrails and has_customers) or
+            (has_business_info and has_guardrails and has_customers) or
+            (merchant.get("merchant_id") == "demo_merchant_001" and has_guardrails and has_customers)
+        )
+        if onboarding_completed and not merchant.get("onboarding_completed"):
+            merchants_collection.update_one(
+                {"_id": merchant["_id"]},
+                {"$set": {"onboarding_completed": True, "onboarding_step": "completed"}}
+            )
+        elif not onboarding_completed and merchant.get("onboarding_completed"):
+            merchants_collection.update_one(
+                {"_id": merchant["_id"]},
+                {"$set": {"onboarding_completed": False}}
+            )
+
+        session_token = secrets.token_hex(32)
+        merchants_collection.update_one(
+            {"_id": merchant["_id"]},
+            {"$set": {"session_token": session_token}}
+        )
+        
         return {
             "merchant_id": merchant.get("merchant_id"),
+            "full_name": merchant.get("full_name"),
             "business_name": merchant.get("business_name"),
-            "email": merchant.get("email")
+            "email": merchant.get("email"),
+            "token": session_token,
+            "onboarding_completed": onboarding_completed
         }
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail="Internal Server Error")
+
+def get_current_merchant(authorization: str = Header(None)) -> str:
+    """Dependency to get merchant_id from Authorization token"""
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
+    
+    token = authorization.split(" ")[1]
+    merchant = merchants_collection.find_one({"session_token": token})
+    if not merchant:
+        raise HTTPException(status_code=401, detail="Invalid session token")
+        
+    return merchant.get("merchant_id")
 
 class RegisterRequest(BaseModel):
     full_name: str
@@ -157,23 +224,26 @@ def register(request: RegisterRequest):
             "password": hash_password(request.password),
             "email_verified": False,
             "verification_token": verification_token,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "rules": {
-                "max_discount_percentage": 25.0,
-                "min_margin_percentage": 30.0
-            }
+            "onboarding_completed": False,
+            "onboarding_step": "welcome",
+            "created_at": datetime.now(timezone.utc).isoformat()
         }
         
         merchants_collection.insert_one(merchant_doc)
+        print(f"[AUTH DEV] Verification link: http://localhost:3000/verify-email?token={verification_token}")
         
         try:
             send_verification_email(request.email, verification_token)
         except Exception as e:
-            # If email fails, we should probably rollback the user creation or let them know it failed.
-            # We'll just raise an error so the frontend knows verification wasn't sent.
-            raise HTTPException(status_code=500, detail=f"User registered, but failed to send verification email: {str(e)}")
+            logger.warning(f"[DEV BYPASS] Verification email delivery skipped/failed: {e}")
+            if REQUIRE_EMAIL_VERIFICATION:
+                raise HTTPException(status_code=500, detail=f"User registered, but failed to send verification email: {str(e)}")
         
-        return {"status": "success", "message": "Registration successful. Please check your email to verify your account."}
+        return {
+            "status": "success", 
+            "message": "Registration successful. You may now log in to begin onboarding." if not REQUIRE_EMAIL_VERIFICATION else "Registration successful. Please check your email to verify your account.",
+            "require_email_verification": REQUIRE_EMAIL_VERIFICATION
+        }
     except HTTPException:
         raise
     except Exception as e:
@@ -482,6 +552,14 @@ def create_campaign(request: CampaignCreateRequest):
                 "created_at": existing_campaign.get("created_at")
             }
 
+        # Step 2: Load business rules
+        merchant_rules = merchant.get("rules")
+        if not merchant_rules or "max_discount_percentage" not in merchant_rules:
+            raise HTTPException(
+                status_code=400,
+                detail="Merchant guardrail rules are not configured. Complete your business rules before generating campaigns."
+            )
+
         # Create base Campaign Doc
         campaign_id = str(uuid.uuid4())
         campaign_doc = {
@@ -495,9 +573,6 @@ def create_campaign(request: CampaignCreateRequest):
             "updated_at": datetime.now(timezone.utc).isoformat()
         }
         campaigns_collection.insert_one(campaign_doc)
-        
-        # Step 2: Load business rules
-        merchant_rules = merchant.get("rules", {})
         
         # Fetch target customers
         all_customers = list(customers_collection.find({"merchant_id": request.merchant_id}))
@@ -547,6 +622,8 @@ def create_campaign(request: CampaignCreateRequest):
                     segment_info.get("discount_pct", 0), 
                     merchant_rules.get("max_discount_percentage", 20)
                 )
+                if not isinstance(segment_info.get("merchant_constraints"), list):
+                    segment_info["merchant_constraints"] = []
                 segment_info["merchant_constraints"].append("Forced discount clamp due to rules violation")
                 
             generated_offers[segment_name] = {
@@ -1061,106 +1138,482 @@ def verify_payment(request: PaymentVerificationRequest):
 
 # --- DATA RETRIEVAL APIS ---
 
+import math
+import re
+
 @app.get("/customers")
 def get_customers(
     merchant_id: str = Query(...),
     segment: Optional[str] = None,
+    search: Optional[str] = None,
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100)
 ):
+    """Paginated customer list with merchant isolation, segment filter, and total metadata."""
     query = {"merchant_id": merchant_id}
+    
+    if segment and segment.lower() != "all":
+        query["segment"] = segment
+        
+    if search and search.strip():
+        safe_search = re.escape(search.strip())
+        query["$or"] = [
+            {"id": {"$regex": safe_search, "$options": "i"}},
+            {"name": {"$regex": safe_search, "$options": "i"}},
+            {"email": {"$regex": safe_search, "$options": "i"}}
+        ]
+        
+    total_count = customers_collection.count_documents(query)
+    total_pages = max(1, math.ceil(total_count / limit)) if total_count > 0 else 1
+    
     cursor = customers_collection.find(query, {"_id": 0}).skip((page - 1) * limit).limit(limit)
     customers = list(cursor)
-    total_count = customers_collection.count_documents(query)
     
+    # Ensure segment is populated on all items
     from segmentation import segment_customer
-    filtered_customers = []
     for c in customers:
-        seg = segment_customer(c)
-        c["segment"] = seg
-        if not segment or seg == segment:
-            filtered_customers.append(c)
+        if not c.get("segment"):
+            c["segment"] = segment_customer(c)
+            
+    # Aggregated segment breakdown across all customers for this merchant
+    try:
+        segment_pipeline = [
+            {"$match": {"merchant_id": merchant_id}},
+            {"$group": {"_id": "$segment", "count": {"$sum": 1}}}
+        ]
+        segment_counts = {
+            doc["_id"] or "Unknown": doc["count"]
+            for doc in customers_collection.aggregate(segment_pipeline)
+            if doc.get("_id")
+        }
+    except Exception as e:
+        segment_counts = {}
             
     return {
-        "items": filtered_customers,
+        "items": customers,
+        "customers": customers,
+        "total": total_count,
         "page": page,
         "limit": limit,
-        "total": total_count
+        "total_pages": total_pages,
+        "segments": segment_counts
     }
 
 import csv
 import io
+import time
+import codecs
+from segmentation import segment_customer
+
+@app.post("/customers/validate-csv")
+async def validate_csv_endpoint(
+    file: UploadFile = File(...)
+):
+    """Validates CSV format, auto-detects column mapping, aggregates metrics, and returns preview."""
+    try:
+        content = await file.read()
+        from csv_processor import validate_and_preview_csv
+        return validate_and_preview_csv(content, file.filename)
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+    except Exception as e:
+        print(f"Error validating CSV: {e}")
+        raise HTTPException(status_code=400, detail=f"CSV Validation Error: {str(e)}")
 
 @app.post("/customers/upload")
 async def upload_customers(
-    merchant_id: str = Form(...),
-    file: UploadFile = File(...)
+    merchant_id: str = Depends(get_current_merchant),
+    file: UploadFile = File(...),
+    mode: str = Form("replace")
 ):
-    """Parses a CSV of customers and inserts them into DB"""
-    if not file.filename.endswith('.csv'):
-        raise HTTPException(status_code=400, detail="Only CSV files are allowed")
-        
+    """Parses customer/transaction CSV, computes behavioral metrics, segments customers, and imports into DB."""
     try:
-        contents = await file.read()
-        decoded = contents.decode('utf-8')
-        reader = csv.DictReader(io.StringIO(decoded))
-        
-        customers_to_insert = []
-        for row in reader:
-            # Generate a new ID if missing
-            cust_id = row.get("id") or row.get("customer_id") or str(uuid.uuid4())
-            
-            # Create standard schema
-            customer = {
-                "id": cust_id,
-                "merchant_id": merchant_id,
-                "name": row.get("name", "Unknown Customer"),
-                "email": row.get("email", ""),
-                "purchase_count": int(row.get("purchase_count", 0)),
-                "days_since_last_purchase": int(row.get("days_since_last_purchase", 0)),
-                "lifetime_value": float(row.get("lifetime_value", 0.0)),
-                "cart_status": row.get("cart_status", ""),
-                "average_order_value": float(row.get("average_order_value", 0.0))
-            }
-            customers_to_insert.append(customer)
-            
-        if customers_to_insert:
-            # Delete old customers for this merchant to simulate a clean state for testing
-            customers_collection.delete_many({"merchant_id": merchant_id})
-            customers_collection.insert_many(customers_to_insert)
-            
-        return {"status": "success", "imported": len(customers_to_insert)}
-        
+        content = await file.read()
+        from csv_processor import import_processed_csv
+        return import_processed_csv(content, file.filename, merchant_id, mode=mode.lower().strip())
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
     except Exception as e:
-        print(f"Error parsing CSV: {e}")
-        raise HTTPException(status_code=400, detail=f"Invalid CSV format: {str(e)}")
+        print(f"Error importing CSV: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to import customer dataset: {str(e)}")
+
+@app.post("/customers/validate-multi-csv")
+async def validate_multi_csv_endpoint(
+    customers_file: UploadFile = File(...),
+    orders_file: UploadFile = File(...),
+    order_items_file: UploadFile = File(...)
+):
+    """Validates 3 related CSV files (Customers, Orders, Order Items), computes relational joins, and returns preview."""
+    try:
+        for f in [customers_file, orders_file, order_items_file]:
+            if not f.filename.lower().endswith(".csv"):
+                raise HTTPException(status_code=400, detail=f"File '{f.filename}' must be a valid CSV file (.csv extension required).")
+                
+        cust_content = await customers_file.read()
+        ord_content = await orders_file.read()
+        items_content = await order_items_file.read()
+        
+        from csv_processor import validate_and_preview_relational_csv
+        return validate_and_preview_relational_csv(
+            cust_content,
+            ord_content,
+            items_content,
+            customers_filename=customers_file.filename,
+            orders_filename=orders_file.filename,
+            order_items_filename=order_items_file.filename
+        )
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error validating relational CSVs: {e}")
+        raise HTTPException(status_code=400, detail=f"Relational CSV Validation Error: {str(e)}")
+
+@app.post("/customers/upload-multi")
+async def upload_multi_customers(
+    merchant_id: str = Depends(get_current_merchant),
+    customers_file: UploadFile = File(...),
+    orders_file: UploadFile = File(...),
+    order_items_file: UploadFile = File(...),
+    mode: str = Form("replace")
+):
+    """Parses and joins 3 related CSV files, calculates behavioral metrics, segments customers, and imports into DB."""
+    try:
+        for f in [customers_file, orders_file, order_items_file]:
+            if not f.filename.lower().endswith(".csv"):
+                raise HTTPException(status_code=400, detail=f"File '{f.filename}' must be a valid CSV file (.csv extension required).")
+
+        cust_content = await customers_file.read()
+        ord_content = await orders_file.read()
+        items_content = await order_items_file.read()
+
+        from csv_processor import import_processed_relational_csv
+        return import_processed_relational_csv(
+            cust_content,
+            ord_content,
+            items_content,
+            merchant_id=merchant_id,
+            mode=mode.lower().strip()
+        )
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error importing relational CSVs: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to import relational customer dataset: {str(e)}")
 
 @app.post("/customers/demo")
-def setup_demo_customers():
-    """Seeds the DB with demo data (merchant and customers)"""
+def setup_demo_customers(merchant_id: str = Depends(get_current_merchant)):
+    """Seeds the DB with demo data (merchant and customers) for authenticated merchant"""
     try:
         from demo import setup_demo_data
-        result = setup_demo_data()
+        merchant = merchants_collection.find_one({"merchant_id": merchant_id})
+        if not merchant:
+            raise HTTPException(status_code=404, detail="Merchant not found")
+
+        # If the authenticated merchant does not yet have guardrails, provide demo guardrails
+        if not merchant.get("rules") or merchant.get("rules", {}).get("max_discount_percentage") is None:
+            demo_rules = {
+                "max_discount_percentage": 20.0,
+                "min_order_value": 500.0,
+                "free_shipping_allowed": True,
+                "max_campaign_budget": 50000.0,
+                "high_value_customer_protection": True,
+                "contact_frequency_days": 7,
+                "min_margin_percentage": 25.0
+            }
+            merchants_collection.update_one(
+                {"_id": merchant["_id"]},
+                {"$set": {"rules": demo_rules}}
+            )
+
+        result = setup_demo_data(merchant_id=merchant_id)
+        
+        # Mark onboarding as completed for this merchant
+        merchants_collection.update_one(
+            {"merchant_id": merchant_id},
+            {"$set": {
+                "onboarding_completed": True,
+                "onboarding_step": "completed"
+            }}
+        )
+
         return {
             "status": "success",
             "message": "Demo data loaded successfully",
+            "merchant_id": merchant_id,
             "customers_count": result.get("customers_count", 0),
-            "segments_count": result.get("segments_count", 0)
+            "segments_count": result.get("segments_count", 0),
+            "onboarding_completed": True
         }
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"Error setting up demo data: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to load demo data: {str(e)}")
 
 @app.post("/customers/demo/reset")
-def reset_demo_customers():
-    """Clears demo data from the DB"""
+def reset_demo_customers(merchant_id: str = Depends(get_current_merchant)):
+    """Clears demo data from the DB for authenticated merchant"""
     try:
         from demo import clear_demo_data
-        clear_demo_data()
+        clear_demo_data(merchant_id=merchant_id)
         return {"status": "success", "message": "Demo data reset successfully"}
     except Exception as e:
         print(f"Error resetting demo data: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to reset demo data: {str(e)}")
+
+@app.get("/merchants/{merchant_id}/guardrails")
+def get_merchant_guardrails(merchant_id: str):
+    """Retrieve merchant-specific guardrails or sensible defaults for onboarding"""
+    merchant = merchants_collection.find_one({"merchant_id": merchant_id})
+    if not merchant:
+        raise HTTPException(status_code=404, detail="Merchant not found")
+        
+    default_rules = {
+        "max_discount_percentage": 15.0,
+        "min_order_value": 500.0,
+        "free_shipping_allowed": True,
+        "max_campaign_budget": 50000.0,
+        "high_value_customer_protection": True,
+        "contact_frequency_days": 7,
+        "min_margin_percentage": 25.0
+    }
+    rules = merchant.get("rules") or default_rules
+    return {
+        "merchant_id": merchant_id,
+        "rules": rules,
+        "has_guardrails": bool(merchant.get("rules") and merchant.get("rules", {}).get("max_discount_percentage") is not None)
+    }
+
+@app.put("/merchants/{merchant_id}/guardrails")
+def update_merchant_guardrails(merchant_id: str, request: GuardrailsRequest):
+    """Validate and update merchant guardrails"""
+    merchant = merchants_collection.find_one({"merchant_id": merchant_id})
+    if not merchant:
+        raise HTTPException(status_code=404, detail="Merchant not found")
+        
+    rules_dict = request.model_dump() if hasattr(request, "model_dump") else request.dict()
+    is_valid, err_msg = validate_merchant_guardrails(rules_dict)
+    if not is_valid:
+        raise HTTPException(status_code=400, detail=err_msg)
+        
+    update_fields = {
+        "rules": rules_dict,
+        "onboarding_step": "data_setup"
+    }
+    if merchant.get("onboarding_completed"):
+        update_fields["onboarding_step"] = "completed"
+        
+    merchants_collection.update_one(
+        {"_id": merchant["_id"]},
+        {"$set": update_fields}
+    )
+    return {
+        "status": "success",
+        "message": "Merchant guardrails saved successfully",
+        "rules": rules_dict,
+        "onboarding_step": update_fields["onboarding_step"]
+    }
+
+@app.get("/merchants/{merchant_id}/profile")
+def get_merchant_profile(merchant_id: str):
+    """Get merchant business profile"""
+    merchant = merchants_collection.find_one({"merchant_id": merchant_id})
+    if not merchant:
+        raise HTTPException(status_code=404, detail="Merchant not found")
+        
+    return {
+        "merchant_id": merchant_id,
+        "business_name": merchant.get("business_name", ""),
+        "business_category": merchant.get("business_category", "E-commerce"),
+        "business_description": merchant.get("business_description", ""),
+        "full_name": merchant.get("full_name", ""),
+        "email": merchant.get("email", "")
+    }
+
+@app.put("/merchants/{merchant_id}/profile")
+def update_merchant_profile(merchant_id: str, request: BusinessProfileRequest):
+    """Update merchant business profile"""
+    merchant = merchants_collection.find_one({"merchant_id": merchant_id})
+    if not merchant:
+        raise HTTPException(status_code=404, detail="Merchant not found")
+        
+    if not request.business_name.strip():
+        raise HTTPException(status_code=400, detail="Business name is required")
+        
+    update_data = {
+        "business_name": request.business_name.strip(),
+        "business_category": request.business_category or "E-commerce",
+        "business_description": request.business_description or "",
+        "onboarding_step": "guardrails_setup"
+    }
+    if request.full_name and request.full_name.strip():
+        update_data["full_name"] = request.full_name.strip()
+        
+    merchants_collection.update_one(
+        {"_id": merchant["_id"]},
+        {"$set": update_data}
+    )
+    return {
+        "status": "success",
+        "message": "Business profile updated successfully",
+        "business_name": request.business_name.strip(),
+        "full_name": update_data.get("full_name", merchant.get("full_name", ""))
+    }
+
+@app.post("/merchants/{merchant_id}/complete-onboarding")
+def complete_onboarding(merchant_id: str):
+    """Mark onboarding as completed once business info, guardrails, and customer dataset are configured"""
+    merchant = merchants_collection.find_one({"merchant_id": merchant_id})
+    if not merchant:
+        raise HTTPException(status_code=404, detail="Merchant not found")
+        
+    has_business_info = bool(merchant.get("business_name"))
+    has_guardrails = bool(
+        merchant.get("rules") and 
+        merchant.get("rules", {}).get("max_discount_percentage") is not None and
+        merchant.get("rules", {}).get("min_margin_percentage") is not None
+    )
+    customers_count = customers_collection.count_documents({"merchant_id": merchant_id})
+    has_customers = customers_count > 0
+    
+    if not has_business_info:
+        raise HTTPException(status_code=400, detail="Business information is required to complete onboarding")
+    if not has_guardrails:
+        raise HTTPException(status_code=400, detail="Revenue guardrails (both max discount & min margin) must be configured before completing onboarding")
+    if not has_customers:
+        raise HTTPException(status_code=400, detail="Customer/transaction dataset must be uploaded and processed before completing onboarding")
+        
+    merchants_collection.update_one(
+        {"_id": merchant["_id"]},
+        {"$set": {
+            "onboarding_completed": True,
+            "onboarding_step": "completed"
+        }}
+    )
+    return {
+        "status": "success",
+        "message": "Onboarding completed successfully",
+        "merchant_id": merchant_id,
+        "onboarding_completed": True
+    }
+
+@app.get("/merchants/{merchant_id}/onboarding-status")
+def get_onboarding_status(merchant_id: str):
+    """Check if merchant has completed all onboarding steps"""
+    merchant = merchants_collection.find_one({"merchant_id": merchant_id})
+    if not merchant:
+        raise HTTPException(status_code=404, detail="Merchant not found")
+        
+    has_business_info = bool(merchant.get("business_name"))
+    has_guardrails = bool(
+        merchant.get("rules") and 
+        merchant.get("rules", {}).get("max_discount_percentage") is not None and
+        merchant.get("rules", {}).get("min_margin_percentage") is not None
+    )
+    customers_count = customers_collection.count_documents({"merchant_id": merchant_id})
+    has_customers = customers_count > 0
+    
+    # Fully completed only if ALL required steps are satisfied
+    is_completed = bool(
+        (merchant.get("onboarding_completed") is True and has_business_info and has_guardrails and has_customers) or
+        (has_business_info and has_guardrails and has_customers) or
+        (merchant_id == "demo_merchant_001" and has_guardrails and has_customers)
+    )
+    
+    if is_completed:
+        step = "completed"
+        if not merchant.get("onboarding_completed"):
+            merchants_collection.update_one(
+                {"_id": merchant["_id"]},
+                {"$set": {"onboarding_completed": True, "onboarding_step": "completed"}}
+            )
+    else:
+        if merchant.get("onboarding_completed"):
+            merchants_collection.update_one(
+                {"_id": merchant["_id"]},
+                {"$set": {"onboarding_completed": False}}
+            )
+        step = merchant.get("onboarding_step")
+        if not step or step == "welcome" or step == "business_setup":
+            step = "business_setup"
+        elif not has_business_info:
+            step = "business_setup"
+        elif not has_guardrails:
+            step = "guardrails_setup"
+        elif not has_customers:
+            step = "data_setup"
+        else:
+            step = "completed"
+            is_completed = True
+            
+    return {
+        "merchant_id": merchant_id,
+        "full_name": merchant.get("full_name", ""),
+        "business_name": merchant.get("business_name", ""),
+        "email": merchant.get("email", ""),
+        "onboarding_completed": is_completed,
+        "onboarding_step": step,
+        "has_business_info": has_business_info,
+        "has_guardrails": has_guardrails,
+        "has_customers": has_customers,
+        "customers_count": customers_count,
+        "rules": merchant.get("rules")
+    }
+
+@app.get("/merchants/{merchant_id}/dashboard-summary")
+def get_dashboard_summary(merchant_id: str):
+    """Aggregate customer and business metrics for merchant dashboard."""
+    merchant = merchants_collection.find_one({"merchant_id": merchant_id})
+    if not merchant:
+        raise HTTPException(status_code=404, detail="Merchant not found")
+
+    pipeline = [
+        {"$match": {"merchant_id": merchant_id}},
+        {
+            "$group": {
+                "_id": None,
+                "total_customers": {"$sum": 1},
+                "total_revenue": {"$sum": "$lifetime_value"},
+                "total_purchases": {"$sum": "$purchase_count"},
+                "avg_aov": {"$avg": "$average_order_value"}
+            }
+        }
+    ]
+    agg = list(customers_collection.aggregate(pipeline))
+    if agg:
+        total_customers = agg[0].get("total_customers", 0)
+        total_revenue = round(agg[0].get("total_revenue", 0.0), 2)
+        total_purchases = agg[0].get("total_purchases", 0)
+        aov = round(total_revenue / max(1, total_purchases), 2) if total_purchases > 0 else round(agg[0].get("avg_aov", 0.0), 2)
+    else:
+        total_customers = 0
+        total_revenue = 0.0
+        total_purchases = 0
+        aov = 0.0
+
+    # Segment distribution
+    segment_pipeline = [
+        {"$match": {"merchant_id": merchant_id}},
+        {"$group": {"_id": "$segment", "count": {"$sum": 1}}}
+    ]
+    segment_distribution = {
+        (doc["_id"] or "regular"): doc["count"]
+        for doc in customers_collection.aggregate(segment_pipeline)
+    }
+
+    return {
+        "merchant_id": merchant_id,
+        "business_name": merchant.get("business_name", ""),
+        "total_customers": total_customers,
+        "total_revenue": total_revenue,
+        "total_orders": total_purchases,
+        "average_order_value": aov,
+        "segment_distribution": segment_distribution
+    }
 
 @app.get("/customers/{customer_id}")
 def get_customer(customer_id: str, merchant_id: str = Query(...)):

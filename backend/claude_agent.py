@@ -44,7 +44,8 @@ def get_client():
         # Create client with minimal configuration to avoid environment issues
         client = OpenAI(
             api_key=api_key,
-            base_url="https://openrouter.ai/api/v1"
+            base_url="https://openrouter.ai/api/v1",
+            timeout=15.0
         )
     return client
 
@@ -199,14 +200,18 @@ def generate_campaign_intelligence(
     user_message = f"""
     Campaign Goal: {goal}
     
-    Merchant Constraints:
-    Max discount allowed: {merchant_rules.get('max_discount_percentage', 20)}%
-    Min margin required: {merchant_rules.get('min_margin_percentage', 30)}%
+    Merchant Guardrail Constraints (HARD CONSTRAINTS - NEVER VIOLATE):
+    - Maximum discount allowed: {merchant_rules.get('max_discount_percentage', 20)}% (Never recommend higher)
+    - Minimum order value: {merchant_rules.get('min_order_value', 0)}
+    - Free shipping allowed: {merchant_rules.get('free_shipping_allowed', True)}
+    - High-value customer protection: {merchant_rules.get('high_value_customer_protection', False)} (If true, prefer non-discount or VIP incentives over high discounts for high-value customers)
+    - Maximum campaign budget: {merchant_rules.get('max_campaign_budget', 'Not set')}
+    - Minimum margin required: {merchant_rules.get('min_margin_percentage', 25)}%
     
     Customer Dataset:
     {json.dumps(minified_customers)}
     
-    Based on the goal and dataset, group the customers into dynamic segments and recommend an offer for each.
+    Based on the goal and dataset, group the customers into dynamic segments and recommend an offer for each adhering strictly to the merchant guardrail constraints.
     """
     
     try:
@@ -248,6 +253,131 @@ def generate_campaign_intelligence(
     except Exception as e:
         print(f"[Note] OpenRouter API unavailable ({type(e).__name__}), using fallback")
         return generate_dynamic_fallback(customers, merchant_rules, goal)
+
+
+def get_offer_for_segment(
+    segment: str, 
+    merchant_rules: dict, 
+    use_deterministic: bool = False,
+    customer_context: dict = None,
+    campaign_context: dict = None,
+    historical_context: dict = None
+) -> dict:
+    """
+    Call OpenRouter API or use deterministic fallback to get an offer recommendation for a segment.
+    Strictly adheres to merchant guardrails.
+    """
+    max_discount = float(merchant_rules.get("max_discount_percentage", 20.0)) if merchant_rules else 20.0
+
+    DETERMINISTIC_OFFERS = {
+        "loyal": {
+            "recommended_offer_type": "free_shipping",
+            "recommended_discount_percentage": 0,
+            "reason": "Loyal customers have high lifetime value. Preserve margin with VIP perks instead of discount.",
+            "confidence": 1.0,
+            "campaign_goal": "Retention",
+            "why_this_segment": "High-value loyal purchasers",
+            "recommended_strategy": "VIP Retention",
+            "offer": "VIP Free Shipping and Early Access",
+            "why_this_offer": "Preserve margins while rewarding customer loyalty",
+            "discount_if_applicable": 0
+        },
+        "new_visitor": {
+            "recommended_offer_type": "percentage_discount",
+            "recommended_discount_percentage": min(10.0, max_discount),
+            "reason": f"New visitors need an incentive to convert. {min(10.0, max_discount)}% discount converts without violating guardrails.",
+            "confidence": 1.0,
+            "campaign_goal": "First-time Conversion",
+            "why_this_segment": "Browsers with zero prior purchases",
+            "recommended_strategy": "First-time Conversion",
+            "offer": f"{int(min(10.0, max_discount))}% off first order",
+            "why_this_offer": "Incentivize initial checkout",
+            "discount_if_applicable": min(10.0, max_discount)
+        },
+        "cart_abandoned": {
+            "recommended_offer_type": "percentage_discount",
+            "recommended_discount_percentage": min(15.0, max_discount),
+            "reason": f"Cart abandoners have high purchase intent. {min(15.0, max_discount)}% discount recovers abandoned cart safely.",
+            "confidence": 1.0,
+            "campaign_goal": "Cart Recovery",
+            "why_this_segment": "Shoppers with active abandoned carts",
+            "recommended_strategy": "Cart Recovery",
+            "offer": f"{int(min(15.0, max_discount))}% off to complete order",
+            "why_this_offer": "Urgency and incentive to finish purchase",
+            "discount_if_applicable": min(15.0, max_discount)
+        },
+        "dormant": {
+            "recommended_offer_type": "percentage_discount",
+            "recommended_discount_percentage": min(20.0, max_discount),
+            "reason": f"Dormant customers require a stronger reactivation offer capped at merchant max discount ({max_discount}%).",
+            "confidence": 1.0,
+            "campaign_goal": "Reactivation",
+            "why_this_segment": "Customers with no orders in over 60 days",
+            "recommended_strategy": "Win-back",
+            "offer": f"{int(min(20.0, max_discount))}% off welcome back",
+            "why_this_offer": "Win-back incentive",
+            "discount_if_applicable": min(20.0, max_discount)
+        },
+        "regular": {
+            "recommended_offer_type": "loyalty_points",
+            "recommended_discount_percentage": min(5.0, max_discount),
+            "reason": "Regular customers are steady. Small reward preserves profitability.",
+            "confidence": 1.0,
+            "campaign_goal": "Repeat Purchase",
+            "why_this_segment": "Consistent periodic buyers",
+            "recommended_strategy": "Engagement",
+            "offer": f"{int(min(5.0, max_discount))}% off next order",
+            "why_this_offer": "Consistent engagement incentive",
+            "discount_if_applicable": min(5.0, max_discount)
+        }
+    }
+
+    if use_deterministic:
+        return DETERMINISTIC_OFFERS.get(segment, DETERMINISTIC_OFFERS["regular"])
+
+    prompt = f"""
+    Segment: {segment}
+    Merchant Constraints (HARD RULES):
+    - Max discount: {max_discount}%
+    - Min order value: {merchant_rules.get('min_order_value', 0)}
+    - Free shipping allowed: {merchant_rules.get('free_shipping_allowed', True)}
+    - High-value customer protection: {merchant_rules.get('high_value_customer_protection', False)}
+    
+    Customer Context: {json.dumps(customer_context) if customer_context else 'None'}
+    Campaign Context: {json.dumps(campaign_context) if campaign_context else 'None'}
+    
+    Recommend the optimal offer adhering strictly to merchant constraints. Return JSON matching:
+    {{
+      "recommended_offer_type": "string",
+      "recommended_discount_percentage": {min(10.0, max_discount)},
+      "reason": "string",
+      "confidence": 0.9,
+      "campaign_goal": "string",
+      "why_this_segment": "string",
+      "recommended_strategy": "string",
+      "offer": "string",
+      "why_this_offer": "string",
+      "discount_if_applicable": {min(10.0, max_discount)}
+    }}
+    """
+
+    try:
+        openai_client = get_client()
+        response = openai_client.chat.completions.create(
+            model="openrouter/free",
+            max_tokens=600,
+            messages=[
+                {"role": "system", "content": "You recommend offers adhering strictly to merchant guardrail rules. Reply strictly in JSON."},
+                {"role": "user", "content": prompt}
+            ]
+        )
+        data = parse_json_safely(response.choices[0].message.content)
+        if not isinstance(data, dict) or not data:
+            return DETERMINISTIC_OFFERS.get(segment, DETERMINISTIC_OFFERS["regular"])
+        return data
+    except Exception as e:
+        print(f"[Note] get_offer_for_segment API call failed ({e}), using deterministic offer")
+        return DETERMINISTIC_OFFERS.get(segment, DETERMINISTIC_OFFERS["regular"])
 
 
 def generate_campaign_insights(campaign_data: dict, analytics: dict, segments_analytics: list) -> dict:
@@ -609,13 +739,17 @@ Ensure your response is valid JSON matching this schema exactly:
         except:
             pass
 
+        max_allowed_discount = float(context.get("merchant_rules", {}).get("max_discount_percentage", 20.0))
+        safe_fallback_discount = min(10.0, max_allowed_discount)
+        safe_display_discount = int(safe_fallback_discount) if safe_fallback_discount.is_integer() else safe_fallback_discount
+
         return {
             "strategy": "Re-engage High Value Segments",
             "recommendation": {
                 "segment": target_segment,
                 "action": "Targeted Discount",
-                "offer": f"10% off for {target_segment} customers",
-                "discount_percentage": 10
+                "offer": f"{safe_display_discount}% off for {target_segment} customers",
+                "discount_percentage": safe_fallback_discount
             },
             "reasoning": f"Focusing on the {target_segment} segment offers a strong opportunity for conversion based on current data. (Deterministic Fallback used due to AI unavailability).",
             "priority": "high",

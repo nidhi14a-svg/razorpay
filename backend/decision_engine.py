@@ -20,6 +20,10 @@ class AIRecommendationSchema(BaseModel):
     ai_reasoning: Optional[str] = None
     merchant_constraints: Optional[str] = None
     expected_objective: Optional[str] = None
+    recommended_discount_percentage: Optional[float] = None
+    recommended_offer_type: Optional[str] = None
+    confidence: Optional[float] = None
+    reason: Optional[str] = None
 
 def run_offer_decision_engine(
     merchant_id: str,
@@ -46,6 +50,9 @@ def run_offer_decision_engine(
         segment_stats = {"average_purchase_count": customer.get("purchase_count", 0)}
     elif segment is None or segment_stats is None:
         raise ValueError("Either customer or (segment and segment_stats) must be provided")
+
+    if not merchant_rules or "max_discount_percentage" not in merchant_rules:
+        raise ValueError("Merchant guardrail rules are not present. Complete your merchant settings before generating campaigns.")
 
     # 2. Collect Historical Performance
     historical_context = {

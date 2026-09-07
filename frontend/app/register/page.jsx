@@ -17,6 +17,7 @@ export default function Register() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState(false)
+  const [verificationRequired, setVerificationRequired] = useState(true)
 
   const handleInputChange = (e) => {
     const { name, value } = e.target
@@ -55,6 +56,7 @@ export default function Register() {
       const data = await response.json()
 
       if (response.ok) {
+        setVerificationRequired(data.require_email_verification !== false)
         setSuccess(true)
       } else {
         setError(data.detail || 'Registration failed')
@@ -74,15 +76,27 @@ export default function Register() {
             <div className="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-teal-100 mb-4">
               <CheckCircle2 className="h-6 w-6 text-teal-600" />
             </div>
-            <h2 className="text-2xl font-bold text-slate-900 mb-2">Check your email</h2>
-            <p className="text-slate-600 mb-6">
-              We've sent a verification link to <strong>{formData.email}</strong>. Please verify your email to activate your account. (In Dev Mode: Check your terminal for the link).
+            <h2 className="text-2xl font-bold text-slate-900 mb-2">
+              {verificationRequired ? "Check your email" : "Account Created Successfully!"}
+            </h2>
+            <p className="text-slate-600 mb-6 text-sm">
+              {verificationRequired ? (
+                <>We've sent a verification link to <strong>{formData.email}</strong>. Please verify your email to activate your account.</>
+              ) : (
+                <>
+                  <span className="inline-block px-2.5 py-1 bg-amber-50 text-amber-700 border border-amber-200 rounded-full text-xs font-semibold mb-2">
+                    Dev Mode: Email Verification Bypassed
+                  </span>
+                  <br />
+                  Your merchant account is ready for local testing. Proceed directly to log in and configure your business onboarding.
+                </>
+              )}
             </p>
             <Link
               href="/login"
-              className="w-full flex justify-center py-2.5 px-4 border border-transparent rounded-lg shadow-sm text-sm font-medium text-white bg-teal-600 hover:bg-teal-700 transition-colors"
+              className="w-full flex justify-center items-center gap-2 py-2.5 px-4 border border-transparent rounded-lg shadow-sm text-sm font-medium text-white bg-teal-600 hover:bg-teal-700 transition-colors"
             >
-              Return to Login
+              {verificationRequired ? "Return to Login" : "Log In & Continue to Onboarding →"}
             </Link>
           </div>
         </div>

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import Link from 'next/link'
 import { AIInsightCard } from '@/components/AIInsightCard'
 import { EmptyState } from '@/components/EmptyState'
 import { LoadingSkeleton } from '@/components/LoadingSkeleton'
@@ -152,7 +153,42 @@ export default function IntelligencePage() {
 
       {!loading && !error && hasRun && data && (
         <div className="max-w-4xl mx-auto animate-in slide-in-from-bottom-4 duration-500">
-          {data.status === 'FAILED' ? (
+          {data.status === 'GUARDRAILS_MISSING' || data.status === 'MISSING_GUARDRAILS' ? (
+            <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-400 p-8 rounded-3xl text-center shadow-sm max-w-2xl mx-auto">
+              <h3 className="text-2xl font-bold mb-3">Revenue Guardrails Required</h3>
+              <p className="text-base text-amber-700 dark:text-amber-300 mb-6">{data.reason || 'Complete your merchant guardrails (max discount & min margin) before generating AI intelligence.'}</p>
+              <Link
+                href="/onboarding?step=guardrails"
+                className="inline-flex items-center gap-2 bg-brand-primary hover:bg-brand-teal text-white font-bold px-6 py-3 rounded-xl transition-all shadow-sm"
+              >
+                Configure Guardrails
+              </Link>
+            </div>
+          ) : (data.status === 'INSUFFICIENT_CUSTOMER_DATA' || data.status === 'NO_CUSTOMER_DATA') ? (
+            <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 text-blue-800 dark:text-blue-300 p-8 rounded-3xl text-center shadow-sm max-w-2xl mx-auto">
+              <h3 className="text-2xl font-bold mb-3">No Customer Data Uploaded</h3>
+              <p className="text-base text-blue-700 dark:text-blue-300 mb-6">{data.reason || 'Please upload your customer dataset to enable segmentation and personalized offers.'}</p>
+              <Link
+                href="/onboarding?step=data"
+                className="inline-flex items-center gap-2 bg-brand-primary hover:bg-brand-teal text-white font-bold px-6 py-3 rounded-xl transition-all shadow-sm"
+              >
+                Upload Customer Dataset
+              </Link>
+            </div>
+          ) : data.status === 'INSUFFICIENT_BEHAVIORAL_DATA' ? (
+            <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-300 p-8 rounded-3xl text-center shadow-sm max-w-2xl mx-auto">
+              <h3 className="text-2xl font-bold mb-3">Insufficient Behavioral Data</h3>
+              <p className="text-base text-amber-700 dark:text-amber-300 mb-6 leading-relaxed">
+                {data.reason || 'Customer records exist, but purchase history could not be calculated because the uploaded CSV does not contain valid transaction amount, quantity/price, or order information.'}
+              </p>
+              <Link
+                href="/onboarding?step=data"
+                className="inline-flex items-center gap-2 bg-brand-primary hover:bg-brand-teal text-white font-bold px-6 py-3 rounded-xl transition-all shadow-sm"
+              >
+                Upload Valid Transactional Dataset
+              </Link>
+            </div>
+          ) : data.status === 'FAILED' ? (
             <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-400 p-8 rounded-2xl text-center shadow-sm">
               <h3 className="text-2xl font-bold mb-3">Analysis Failed</h3>
               <p className="text-lg">{data.reason}</p>

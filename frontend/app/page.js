@@ -10,11 +10,21 @@ export default function LandingPage() {
   const [mounted, setMounted] = useState(false)
   const [isLoggedIn, setIsLoggedIn] = useState(false)
 
+  const [targetHref, setTargetHref] = useState('/register')
+
   useEffect(() => {
     setMounted(true)
     const merchantId = localStorage.getItem('merchantId')
+    const onboardingCompleted = localStorage.getItem('onboardingCompleted')
     if (merchantId) {
       setIsLoggedIn(true)
+      if (onboardingCompleted === 'true') {
+        setTargetHref('/dashboard')
+      } else {
+        setTargetHref('/onboarding')
+      }
+    } else {
+      setTargetHref('/register')
     }
   }, [])
 
@@ -34,8 +44,8 @@ export default function LandingPage() {
           </div>
           <div className="flex items-center gap-4">
             {isLoggedIn ? (
-              <Link href="/dashboard" className="text-sm font-medium hover:text-brand-primary transition-colors">
-                Go to Dashboard
+              <Link href={targetHref} className="text-sm font-medium hover:text-brand-primary transition-colors">
+                {targetHref === '/onboarding' ? 'Complete Onboarding' : 'Go to Dashboard'}
               </Link>
             ) : (
               <>
@@ -43,7 +53,7 @@ export default function LandingPage() {
                   Log in
                 </Link>
                 <Link 
-                  href="/onboarding" 
+                  href="/register" 
                   className="bg-brand-primary hover:bg-brand-teal text-white px-4 py-2 rounded-full text-sm font-medium transition-all shadow-sm hover:shadow-md"
                 >
                   Get Started
@@ -82,10 +92,10 @@ export default function LandingPage() {
               
               <div className="flex flex-col sm:flex-row items-center gap-4 pt-4">
                 <Link 
-                  href={isLoggedIn ? "/dashboard" : "/onboarding"}
+                  href={targetHref}
                   className="w-full sm:w-auto bg-brand-primary hover:bg-brand-teal text-white px-8 py-4 rounded-xl text-lg font-bold transition-all shadow-md hover:shadow-lg hover:-translate-y-0.5 flex items-center justify-center gap-2"
                 >
-                  {isLoggedIn ? "Go to Dashboard" : "Get Started"}
+                  {isLoggedIn ? (targetHref === '/onboarding' ? 'Complete Onboarding' : 'Go to Dashboard') : 'Get Started'}
                 </Link>
               </div>
             </div>

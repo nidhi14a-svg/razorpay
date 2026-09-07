@@ -77,6 +77,10 @@ def init_indexes():
         campaign_executions_collection.create_index("campaign_id")
         campaign_executions_collection.create_index("merchant_id")
         
+        customers_collection.create_index("merchant_id")
+        customers_collection.create_index([("merchant_id", 1), ("segment", 1)])
+        customers_collection.create_index([("merchant_id", 1), ("id", 1)])
+        
         print("✓ Database indexes initialized successfully")
     except Exception as e:
         print(f"⚠️ Warning: Failed to initialize indexes: {e}")

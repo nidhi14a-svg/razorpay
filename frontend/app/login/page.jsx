@@ -38,8 +38,19 @@ export default function Login() {
           setError(data.detail)
         } else {
           localStorage.setItem('merchantId', data.merchant_id)
-          localStorage.setItem('businessName', data.business_name)
-          router.push('/dashboard')
+          if (data.business_name) localStorage.setItem('businessName', data.business_name)
+          if (data.full_name) localStorage.setItem('fullName', data.full_name)
+          if (data.email) localStorage.setItem('email', data.email)
+          if (data.token) {
+            localStorage.setItem('token', data.token)
+          }
+          if (data.onboarding_completed) {
+            localStorage.setItem('onboardingCompleted', 'true')
+            router.push('/dashboard')
+          } else {
+            localStorage.setItem('onboardingCompleted', 'false')
+            router.push('/onboarding')
+          }
         }
       } else {
         setError(data.detail || 'Login failed')

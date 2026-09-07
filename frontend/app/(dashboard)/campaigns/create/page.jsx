@@ -99,9 +99,19 @@ export default function CreateCampaignPage() {
           </div>
 
           {error && (
-            <div className="p-5 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-400 rounded-2xl mb-8 text-sm font-medium flex items-center gap-3 relative z-10">
-              <div className="w-1.5 h-1.5 rounded-full bg-red-600"></div>
-              {error}
+            <div className="p-5 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-400 rounded-2xl mb-8 text-sm font-medium flex flex-col sm:flex-row sm:items-center justify-between gap-4 relative z-10">
+              <div className="flex items-center gap-3">
+                <div className="w-2 h-2 rounded-full bg-red-600 shrink-0"></div>
+                <span>{error}</span>
+              </div>
+              {(error.toLowerCase().includes('guardrail') || error.toLowerCase().includes('rules')) && (
+                <Link
+                  href="/onboarding?step=guardrails"
+                  className="shrink-0 inline-flex items-center justify-center gap-2 bg-brand-primary hover:bg-brand-teal text-white text-xs font-bold px-4 py-2 rounded-xl transition-colors"
+                >
+                  Configure Guardrails
+                </Link>
+              )}
             </div>
           )}
 
