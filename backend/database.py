@@ -51,6 +51,8 @@ if not db_name:
 else:
     db = client[db_name]
 
+db_name = db.name
+
 # Collections (like tables in SQL)
 merchants_collection = db["merchants"]
 customers_collection = db["customers"]

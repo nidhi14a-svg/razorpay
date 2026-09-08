@@ -19,9 +19,21 @@ def clear_demo_data(merchant_id="demo_merchant_001"):
     if merchant_id == "demo_merchant_001":
         merchants_collection.delete_many({"merchant_id": merchant_id})
 
-def setup_demo_data(merchant_id="demo_merchant_001"):
-    """Create demo merchant and a diverse set of realistic customers."""
-    
+def setup_demo_data(merchant_id="demo_merchant_001", idempotent: bool = False):
+    """Create demo merchant and a diverse set of realistic customers.
+    If idempotent=True, skips seeding if the merchant already exists and has customers.
+    """
+    if idempotent:
+        existing_m = merchants_collection.find_one({"merchant_id": merchant_id})
+        c_count = customers_collection.count_documents({"merchant_id": merchant_id})
+        if existing_m and c_count > 0:
+            print(f"Demo data for '{merchant_id}' already exists ({c_count} customers). Skipping setup.")
+            return {
+                "status": "already_exists",
+                "customers_count": c_count,
+                "merchant_id": merchant_id
+            }
+
     # 1. Clean up existing demo state
     clear_demo_data(merchant_id)
     

@@ -61,6 +61,22 @@ def startup_checks():
     if not os.getenv("RAZORPAY_KEY_ID") or not os.getenv("RAZORPAY_KEY_SECRET"):
         logger.warning("Razorpay credentials not fully configured in environment. Coupon/Payment links will run in simulation mode.")
 
+    # Idempotent demo data seeding for production deployments (e.g. MongoDB Atlas on Render)
+    auto_seed = os.getenv("AUTO_SEED_DEMO_DATA", "false").lower() in ("true", "1", "yes")
+    if auto_seed:
+        try:
+            demo_merchant = merchants_collection.find_one({"merchant_id": "demo_merchant_001"})
+            demo_customers_count = customers_collection.count_documents({"merchant_id": "demo_merchant_001"})
+            if not demo_merchant or demo_customers_count == 0:
+                logger.info("AUTO_SEED_DEMO_DATA=true: Demo merchant/customers missing in MongoDB. Seeding initial demo data...")
+                from demo import setup_demo_data
+                setup_demo_data(merchant_id="demo_merchant_001", idempotent=False)
+                logger.info("✓ Demo data successfully seeded for demo_merchant_001.")
+            else:
+                logger.info(f"AUTO_SEED_DEMO_DATA=true: Demo data already present ({demo_customers_count} customers). Skipping.")
+        except Exception as e:
+            logger.error(f"Failed to auto-seed demo data: {e}")
+
 class LoginRequest(BaseModel):
     email: str
     password: str
